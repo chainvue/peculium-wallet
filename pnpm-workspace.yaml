@@ -1,0 +1,2 @@
+minimumReleaseAgeExclude:
+  - verus-rpc@0.1.1
