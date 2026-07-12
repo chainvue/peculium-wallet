@@ -8,7 +8,8 @@
 // Etappe 1: the domain core — errors, typed intents, compiled hard caps,
 // policy schema, state schema and the pure policy engine.
 // Etappe 2: the append-only spend ledger, state IO and the audit trail.
-// The exports grow per Etappe (E3 gate, E4 buildMcpServer, ...).
+// Etappe 3: policy file IO, the confirm/backend boundaries and the gate.
+// The exports grow per Etappe (E3b LiteBackend, E4 buildMcpServer, ...).
 
 export {
   AuditLog,
@@ -17,11 +18,32 @@ export {
   type AuditLine,
 } from "./audit.js";
 export {
+  MockBackend,
+  SpendRejectedError,
+  SpendUncertainError,
+  type SpendInstruction,
+  type SpendReceipt,
+  type WalletBackend,
+} from "./backend.js";
+export {
+  renderConfirmMessage,
+  StaticConfirmer,
+  type ConfirmContext,
+  type Confirmer,
+  type ConfirmOutcome,
+} from "./confirm.js";
+export {
   PeculiumError,
   PolicyLimitError,
   PolicyParseError,
   StateParseError,
 } from "./errors.js";
+export {
+  WalletGate,
+  type GateDenyCode,
+  type GateOutcome,
+  type WalletGateDeps,
+} from "./gate.js";
 export {
   createKeystoreFile,
   KeystoreError,
@@ -94,6 +116,13 @@ export {
   type DenyCode,
   type LedgerView,
 } from "./policy/engine.js";
+export {
+  loadPolicy,
+  PolicyMissingError,
+  PolicySource,
+  type LoadedPolicy,
+  type PolicyRefreshResult,
+} from "./policy/load.js";
 export {
   parsePolicy,
   policyFileSchema,
