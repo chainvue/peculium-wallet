@@ -6,15 +6,54 @@
 // env or in any MCP tool. See DESIGN.md / RISKS.md.
 //
 // Etappe 1: the domain core — errors, typed intents, compiled hard caps,
-// policy schema, state schema and the pure policy engine. The exports grow
-// per Etappe (E2 ledger, E3 gate, E4 buildMcpServer, ...).
+// policy schema, state schema and the pure policy engine.
+// Etappe 2: the append-only spend ledger, state IO and the audit trail.
+// The exports grow per Etappe (E3 gate, E4 buildMcpServer, ...).
 
+export {
+  AuditLog,
+  auditLineSchema,
+  type AuditEvent,
+  type AuditLine,
+} from "./audit.js";
 export {
   PeculiumError,
   PolicyLimitError,
   PolicyParseError,
   StateParseError,
 } from "./errors.js";
+export {
+  ambiguousRecordSchema,
+  broadcastRecordSchema,
+  confirmedRecordSchema,
+  failedRecordSchema,
+  LedgerRecordError,
+  ledgerRecordSchema,
+  parseLedgerLine,
+  pendingRecordSchema,
+  resolvedRecordSchema,
+  type AmbiguousCause,
+  type AmbiguousRecord,
+  type BroadcastRecord,
+  type ConfirmedRecord,
+  type FailedRecord,
+  type FailureDetail,
+  type FailureStage,
+  type LedgerRecord,
+  type PendingRecord,
+  type ResolvedBy,
+  type ResolvedOutcome,
+  type ResolvedRecord,
+  type SpendApproval,
+} from "./ledger/records.js";
+export {
+  LedgerCorruptError,
+  LedgerLockedError,
+  LedgerStateError,
+  SpendLedger,
+  type RequestSnapshot,
+  type RequestState,
+} from "./ledger/ledger.js";
 export {
   amountStringSchema,
   intentFingerprint,
@@ -62,5 +101,6 @@ export {
   type StateFile,
   type WalletState,
 } from "./state.js";
+export { depleteGrant, readState, writeState } from "./state-io.js";
 
 export const PECULIUM_VERSION = "0.0.0";
