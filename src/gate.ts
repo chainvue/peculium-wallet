@@ -361,14 +361,10 @@ export class WalletGate {
 
   /** Audit an `intent-denied` line and build the matching deny outcome. */
   private deny(intent: SpendIntent, reasonCode: GateDenyCode, humanText: string): GateOutcome {
-    // The audit line schema accepts any non-empty reason string; the
-    // AuditEvent TYPE narrows to the engine's DenyCode. Gate-level codes
-    // ("policy-unreadable", "no-elicitation") reuse the same event on
-    // purpose — the widening is runtime-safe and deliberate.
     this.deps.audit.write({
       event: "intent-denied",
       requestId: intent.requestId,
-      reasonCode: reasonCode as DenyCode,
+      reasonCode,
       kind: intent.kind,
       recipientName: intent.recipientName,
       currency: intent.currency,

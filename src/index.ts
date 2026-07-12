@@ -9,7 +9,9 @@
 // policy schema, state schema and the pure policy engine.
 // Etappe 2: the append-only spend ledger, state IO and the audit trail.
 // Etappe 3: policy file IO, the confirm/backend boundaries and the gate.
-// The exports grow per Etappe (E3b LiteBackend, E4 buildMcpServer, ...).
+// Etappe 4: the MCP surface — server builder, elicitation confirmer and
+//           the read seam (WalletReader / PublicNodeReader).
+// The exports grow per Etappe (E3b LiteBackend, E5 CLI, ...).
 
 export {
   AuditLog,
@@ -21,6 +23,7 @@ export {
   MockBackend,
   SpendRejectedError,
   SpendUncertainError,
+  UnavailableBackend,
   type SpendInstruction,
   type SpendReceipt,
   type WalletBackend,
@@ -117,12 +120,24 @@ export {
   type LedgerView,
 } from "./policy/engine.js";
 export {
+  buildMcpServer,
+  ElicitationConfirmer,
+  PECULIUM_SERVER_NAME,
+  type PeculiumServerDeps,
+} from "./mcp.js";
+export {
   loadPolicy,
   PolicyMissingError,
   PolicySource,
   type LoadedPolicy,
   type PolicyRefreshResult,
 } from "./policy/load.js";
+export {
+  MockReader,
+  PublicNodeReader,
+  type CurrencyBalance,
+  type WalletReader,
+} from "./reader.js";
 export {
   parsePolicy,
   policyFileSchema,

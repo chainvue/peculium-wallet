@@ -17,8 +17,6 @@ import * as path from "node:path";
 
 import { z } from "zod";
 
-import type { DenyCode } from "./policy/engine.js";
-
 const AUDIT_FILE = "audit.jsonl";
 const ROTATED_FILE = "audit.jsonl.1";
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
@@ -81,14 +79,16 @@ export type AuditLine = z.infer<typeof auditLineSchema>;
 
 /**
  * The typed events callers pass to {@link AuditLog.write}. Runtime-shaped
- * (bigint satoshis, engine DenyCode); serialization to the JSON-safe line
- * happens inside `write`.
+ * (bigint satoshis); serialization to the JSON-safe line happens inside
+ * `write`. `reasonCode` is a string on purpose: the gate audits its own
+ * deny codes ("policy-unreadable", "no-elicitation") through the same
+ * event as the engine's `DenyCode`s.
  */
 export type AuditEvent =
   | {
       event: "intent-denied";
       requestId: string;
-      reasonCode: DenyCode;
+      reasonCode: string;
       kind: "topup" | "send";
       recipientName: string;
       currency: string;

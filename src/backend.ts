@@ -42,7 +42,10 @@ export interface SpendReceipt {
   changeOutpoint: string | null;
 }
 
-/** The gate's view of tx execution. Implementations: MockBackend (tests), LiteBackend (E3b). */
+/**
+ * The gate's view of tx execution. Implementations: MockBackend (tests),
+ * UnavailableBackend (E4 wiring), LiteBackend (E3b).
+ */
 export interface WalletBackend {
   executeSpend(instruction: SpendInstruction): Promise<SpendReceipt>;
 }
@@ -73,6 +76,25 @@ export class SpendUncertainError extends PeculiumError {
   constructor(message: string) {
     super("spend-uncertain", message);
     this.name = "SpendUncertainError";
+  }
+}
+
+/**
+ * The placeholder backend this build ships until the LiteBackend lands
+ * (E3b, gated on the SDK live-proof harness — RISKS.md). Every spend fails
+ * DEFINITIVELY at the build stage: a proven no-op, the reservation is
+ * released, no bytes ever leave the machine. Read tools, precheck, policy
+ * and the confirm flow all work; only execution refuses.
+ */
+export class UnavailableBackend implements WalletBackend {
+  executeSpend(): Promise<SpendReceipt> {
+    return Promise.reject(
+      new SpendRejectedError(
+        "build",
+        "this build cannot sign transactions yet: the signing backend (LiteBackend) " +
+          "ships once the SDK live-proof harness passes. No funds were moved.",
+      ),
+    );
   }
 }
 
