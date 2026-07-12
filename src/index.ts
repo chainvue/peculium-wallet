@@ -23,6 +23,18 @@ export {
   StateParseError,
 } from "./errors.js";
 export {
+  createKeystoreFile,
+  KeystoreError,
+  KeystoreExistsError,
+  keystoreFileSchema,
+  KeystoreMissingError,
+  KeystoreUnlockError,
+  readKeystoreFile,
+  unlockKeystore,
+  writeKeystoreFile,
+  type KeystoreFile,
+} from "./keystore.js";
+export {
   ambiguousRecordSchema,
   broadcastRecordSchema,
   confirmedRecordSchema,
