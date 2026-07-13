@@ -26,7 +26,7 @@
 
 import { V402Client } from "@chainvue/v402-client-fetch";
 import { LocalKeySigner } from "@chainvue/v402-signer-verus";
-import { NETWORK_CONFIG } from "@chainvue/verus-typescript-sdk";
+import { NETWORK_CONFIG } from "@chainvue/verus-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { formatAmount, parseAmount } from "verus-rpc";

@@ -12,7 +12,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { NETWORK_CONFIG } from "@chainvue/verus-typescript-sdk";
+import { NETWORK_CONFIG } from "@chainvue/verus-sdk";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { VerusClient } from "verus-rpc";
 

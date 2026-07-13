@@ -13,7 +13,7 @@
  * touches nothing.
  */
 
-import { VerusSDK } from "@chainvue/verus-typescript-sdk";
+import { VerusSDK } from "@chainvue/verus-sdk";
 
 import { createKeystoreFile, writeKeystoreFile } from "../keystore.js";
 import type { AddressMode } from "../limits.js";

@@ -14,7 +14,7 @@
  * identity itself would make revocation meaningless.
  */
 
-import { VerusSDK, utils as sdkUtils } from "@chainvue/verus-typescript-sdk";
+import { VerusSDK, utils as sdkUtils } from "@chainvue/verus-sdk";
 import type { VerusClient } from "verus-rpc";
 
 import { PeculiumError } from "./errors.js";

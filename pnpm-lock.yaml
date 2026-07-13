@@ -14,9 +14,9 @@ importers:
       '@chainvue/v402-signer-verus':
         specifier: ^0.1.2
         version: 0.1.2
-      '@chainvue/verus-typescript-sdk':
-        specifier: link:../verus-typescript-sdk
-        version: link:../verus-typescript-sdk
+      '@chainvue/verus-sdk':
+        specifier: link:../verus-sdk
+        version: link:../verus-sdk
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)

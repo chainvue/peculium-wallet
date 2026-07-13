@@ -25,7 +25,7 @@ import {
   VerusSDK,
   identity as sdkIdentity,
   utils as sdkUtils,
-} from "@chainvue/verus-typescript-sdk";
+} from "@chainvue/verus-sdk";
 import { TransportError, VerusRpcError, type VerusClient } from "verus-rpc";
 
 import {

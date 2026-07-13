@@ -2,7 +2,7 @@
 // offline (fixture key); only the node is mocked. Verifies the orchestration
 // order, the commitment-output handoff and the on-chain verification step.
 
-import { utils as sdkUtils, VerusSDK } from "@chainvue/verus-typescript-sdk";
+import { utils as sdkUtils, VerusSDK } from "@chainvue/verus-sdk";
 import { MockTransport, VerusClient } from "verus-rpc";
 import { describe, expect, it } from "vitest";
 

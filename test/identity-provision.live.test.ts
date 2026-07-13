@@ -10,7 +10,7 @@
 // COST: burns ~100 tVRSC (protocol registration fee) plus dust. Gates:
 // PECULIUM_LIVE_ID=1 + VERUS_RPC_URL/USER/PASS. Runtime ~3-6 min.
 
-import { VerusSDK } from "@chainvue/verus-typescript-sdk";
+import { VerusSDK } from "@chainvue/verus-sdk";
 import { VerusClient } from "verus-rpc";
 import { describe, expect, it } from "vitest";
 
