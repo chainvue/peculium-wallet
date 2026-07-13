@@ -47,6 +47,7 @@ export {
   type GateOutcome,
   type WalletGateDeps,
 } from "./gate.js";
+export { LiteBackend, type LiteBackendDeps } from "./lite-backend.js";
 export {
   createKeystoreFile,
   KeystoreError,

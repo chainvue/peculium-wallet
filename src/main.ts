@@ -16,9 +16,9 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { VerusClient } from "verus-rpc";
 
 import { AuditLog } from "./audit.js";
-import { UnavailableBackend } from "./backend.js";
 import { PECULIUM_VERSION } from "./index.js";
 import { SpendLedger } from "./ledger/ledger.js";
+import { LiteBackend } from "./lite-backend.js";
 import { nativeCurrencyOf, type SupportedChain } from "./limits.js";
 import { buildMcpServer } from "./mcp.js";
 import { PolicySource } from "./policy/load.js";
@@ -62,24 +62,28 @@ async function runMcp(): Promise<void> {
   }
 
   const nodeUrl = process.env["PECULIUM_NODE_URL"] ?? DEFAULT_NODE_URL;
-  // Public gateways ignore auth; placeholder credentials until verus-rpc
-  // 0.2 makes them optional (Track P0).
-  const client = new VerusClient({ url: nodeUrl, user: "public", pass: "public" });
+  // verus-rpc >= 0.2: omit credentials entirely for public gateways.
+  const client = new VerusClient({ url: nodeUrl });
   const reader = new PublicNodeReader(client, nativeCurrencyOf(CHAIN));
+  const backend = new LiteBackend({ client, dir, chain: CHAIN });
 
   const server = buildMcpServer({
     policySource,
     ledger,
-    backend: new UnavailableBackend(),
+    backend,
     reader,
     audit,
     stateDir: dir,
     version: PECULIUM_VERSION,
   });
 
+  const passphraseSet = (process.env["PECULIUM_KEYSTORE_PASSPHRASE"] ?? "") !== "";
   process.stderr.write(
     `peculium: MCP server starting (chain ${CHAIN}, config ${dir}, node ${nodeUrl})\n` +
-      `peculium: NOTE — the signing backend is not in this build yet; spends fail cleanly.\n`,
+      (passphraseSet
+        ? ""
+        : `peculium: WARNING — PECULIUM_KEYSTORE_PASSPHRASE is not set; spends will fail ` +
+          `cleanly until it is configured in the MCP host env.\n`),
   );
   audit.write({ event: "server-start" });
 
