@@ -1,0 +1,30 @@
+# Changelog
+
+## 0.1.0 (2026-07-14) — first release
+
+The safe Verus wallet for AI agents: an MCP server the agent operates
+within strict, human-configured limits, plus a CLI only the human uses.
+Testnet (VRSCTEST) only — mainnet is refused in code.
+
+- Ten MCP tools: balance, receive address, allowlists (with live remaining
+  budgets), precheck (dry-run), transaction status (requestId or txid,
+  staleness + credit-latency hints), spending report (chartable aggregates
+  + recent requests), financial position (cockpit with burn-rate runway),
+  prepaid balance at v402 facilitators (signed queries via the reference
+  client), topup (auto-approve within operator budgets), send (always
+  human-confirmed via MCP elicitation, fail-closed without it).
+- Operator CLI: init (fresh key or adopt), status/history/report/doctor,
+  grant/arm/disarm, allow/revoke (recipients & facilitators incl. apiUrl),
+  set (caps/rate/timeouts), resolve (ambiguous broadcasts, torn-tail
+  repair), identity create (daemon-free VerusID registration, live-proven),
+  export-key, backup/restore (encrypted archives).
+- Fail-closed money semantics end to end: compiled hard caps, per-currency
+  policy caps (trailing-24h windows), append-only crash-safe ledger + audit
+  trail, idempotent requestIds, ambiguous-outcome discipline.
+- Identity mode: the agent's funds can be held BY its VerusID — control is
+  re-verified on-chain at every spend, so a revocation from the cold wallet
+  stops spending immediately. Live-proven on VRSCTEST including the full
+  autonomous v402 topup->auto-credit loop.
+
+Requires: Node >= 22. Uses public Verus nodes (default api.verustest.net);
+no daemon, no chain sync. See README for the security model — read it first.
