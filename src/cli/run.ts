@@ -13,6 +13,7 @@ import { PeculiumError } from "../errors.js";
 import type { SupportedChain } from "../limits.js";
 import { buildDefaultContext, CliUsageError, type CliContext } from "./context.js";
 import { cmdInit } from "./init.js";
+import { cmdIdentity } from "./identity.js";
 import { cmdDoctor, cmdHistory, cmdStatus } from "./inspect.js";
 import { cmdBackup, cmdExportKey, cmdRestore } from "./keyops.js";
 import {
@@ -53,6 +54,8 @@ usage: peculium <command> [options]
   resolve <requestId> (--spent <txid> | --not-spent)
   resolve --repair-tail [--yes]
 
+  identity create <name> --revocation <id> --recovery <id> [--referral <id>]
+                                          register a VerusID (burns the protocol fee)
   export-key                              print the decrypted WIF (ritual)
   backup <file.pcbk> / restore <file.pcbk>   encrypted wallet archive
 
@@ -72,6 +75,7 @@ const COMMANDS: Record<string, Command> = {
   revoke: cmdRevoke,
   set: cmdSet,
   resolve: cmdResolve,
+  identity: cmdIdentity,
   "export-key": cmdExportKey,
   backup: cmdBackup,
   restore: cmdRestore,

@@ -110,6 +110,17 @@ export class LiteBackend implements WalletBackend {
           `address is ${instruction.fromAddress} — refusing to sign (keystore/policy drift).`,
       );
     }
+    if (!instruction.fromAddress.startsWith("R")) {
+      // Identity-HELD funds (P2ID inputs) are not live-proven yet; the v1
+      // agent address is the identity's primary R-address. Refusing here is
+      // cheaper than discovering it at the node (RISKS.md, E6).
+      throw new SpendRejectedError(
+        "build",
+        `agent address ${instruction.fromAddress} is not a transparent R-address; ` +
+          `spending identity-held funds is not supported in v1 — use the identity's ` +
+          `primary R-address as the agent address.`,
+      );
+    }
 
     // 2. Currency resolution: the chain-native currency signs by system id;
     // any other currency resolves name → i-address via the node (read-only,
@@ -143,6 +154,10 @@ export class LiteBackend implements WalletBackend {
       });
       utxos = confirmed
         .filter((utxo) => !excluded.has(`${utxo.txid}:${utxo.outputIndex}`))
+        // Zero-native UTXOs are identity definitions, name commitments or
+        // similar structural outputs — they fund nothing and consuming one
+        // could destroy an identity or a pending registration. Never touch.
+        .filter((utxo) => utxo.satoshis > 0n)
         .map((utxo) => ({
           txid: utxo.txid,
           outputIndex: utxo.outputIndex,
