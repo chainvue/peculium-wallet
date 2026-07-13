@@ -16,7 +16,7 @@ import { loadPolicy } from "../src/policy/load.js";
 import { readState } from "../src/state-io.js";
 import { readLedgerSnapshot, type CliContext } from "../src/cli/context.js";
 import { cmdInit } from "../src/cli/init.js";
-import { cmdDoctor, cmdHistory, cmdStatus } from "../src/cli/inspect.js";
+import { cmdDoctor, cmdHistory, cmdReport, cmdStatus } from "../src/cli/inspect.js";
 import { cmdBackup, cmdExportKey, cmdRestore } from "../src/cli/keyops.js";
 import {
   cmdAllow,
@@ -237,6 +237,22 @@ describe("status / history", () => {
     const text = harness.out.join("\n");
     expect(text).toContain("req-cli-hist1".slice(0, 8) === "req-cli-" ? "send" : "send");
     expect(text).toContain("[failed]");
+  });
+
+  it("report aggregates spent amounts and lists recent requests", async () => {
+    const harness = await initialized();
+    const ledger = SpendLedger.open(harness.dir, { clock: () => NOW });
+    ledger.recordPending(send({ requestId: "req-cli-rep1", amountSats: 25_000_000n }), "auto", "h");
+    ledger.recordBroadcast("req-cli-rep1", "ab".repeat(32), [`${"cd".repeat(32)}:0`], null);
+    ledger.recordPending(send({ requestId: "req-cli-rep2", amountSats: 10_000_000n }), "auto", "h");
+    ledger.recordFailed("req-cli-rep2", "build", { message: "nope" });
+    ledger.close();
+    const code = cmdReport([], harness.ctx);
+    expect(code).toBe(0);
+    const text = harness.out.join("\n");
+    expect(text).toContain("total counted as spent: 0.25000000");
+    expect(text).toContain("req-cli-rep1");
+    expect(text).toContain("1 failed");
   });
 });
 

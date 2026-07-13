@@ -355,6 +355,19 @@ export class SpendLedger implements LedgerView {
     return track === undefined ? null : this.snapshot(track);
   }
 
+  /**
+   * Every request the ledger knows, as snapshots — the data source for
+   * spending reports and txid lookups. Unordered; callers sort by
+   * `pendingAt`.
+   */
+  allSnapshots(): RequestSnapshot[] {
+    const out: RequestSnapshot[] = [];
+    for (const track of this.tracks.values()) {
+      out.push(this.snapshot(track));
+    }
+    return out;
+  }
+
   /** All requests currently stuck at `ambiguous` (for status/resolve). */
   unresolvedAmbiguous(): RequestSnapshot[] {
     const out: RequestSnapshot[] = [];

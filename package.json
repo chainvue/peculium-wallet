@@ -49,6 +49,8 @@
     "prepublishOnly": "pnpm run build && pnpm run typecheck && pnpm run lint && pnpm run test"
   },
   "dependencies": {
+    "@chainvue/v402-client-fetch": "^0.1.1",
+    "@chainvue/v402-signer-verus": "^0.1.2",
     "@chainvue/verus-typescript-sdk": "link:../verus-typescript-sdk",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "verus-rpc": "link:../verus-rpc",

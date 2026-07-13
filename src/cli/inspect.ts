@@ -286,3 +286,94 @@ export async function cmdDoctor(_argv: readonly string[], ctx: CliContext): Prom
   ctx.out(failures === 0 ? `all checks passed` : `${failures} check(s) FAILED`);
   return failures;
 }
+
+/**
+ * `peculium report` — the human twin of wallet_spending_report: spend
+ * aggregates + recent requests from the lock-free ledger snapshot.
+ * Options: --recipient <name>, --kind <topup|send>, --since <hours>
+ * (default 168 = 7 days), --group-by <day|recipient|kind>, --limit <n>.
+ */
+export function cmdReport(argv: readonly string[], ctx: CliContext): number {
+  const { flags } = parseArgs(argv);
+  const sinceRaw = flags.get("since");
+  const sinceHours = typeof sinceRaw === "string" ? Number(sinceRaw) : 168;
+  if (!Number.isFinite(sinceHours) || sinceHours <= 0) {
+    throw new Error(`--since must be a positive number of hours, got ${String(sinceRaw)}`);
+  }
+  const groupByRaw = flags.get("group-by");
+  const groupBy =
+    groupByRaw === "recipient" || groupByRaw === "kind" ? groupByRaw : ("day" as const);
+  const recipient = typeof flags.get("recipient") === "string" ? String(flags.get("recipient")) : null;
+  const kindFilter = flags.get("kind");
+  const limitRaw = flags.get("limit");
+  const limit = typeof limitRaw === "string" ? Math.max(1, Number(limitRaw) || 20) : 20;
+
+  const now = ctx.clock();
+  const sinceMs = now.getTime() - sinceHours * 60 * 60 * 1000;
+  const snapshot = readLedgerSnapshot(ctx.dir);
+  if (snapshot.corrupt !== null) {
+    ctx.err(`WARNING: ledger snapshot truncated (${snapshot.corrupt})`);
+  }
+  const rows = snapshot.rows
+    .filter((row) => new Date(row.pendingAt).getTime() >= sinceMs)
+    .filter((row) => (recipient === null ? true : row.recipientName === recipient))
+    .filter((row) => (typeof kindFilter !== "string" ? true : row.kind === kindFilter))
+    .sort((a, b) => (a.pendingAt < b.pendingAt ? 1 : -1));
+
+  ctx.out(`spending report — last ${sinceHours}h${recipient !== null ? `, recipient ${recipient}` : ""}`);
+  ctx.out(``);
+
+  const buckets = new Map<
+    string,
+    { bucket: string; currency: string; spent: bigint; txCount: number; failed: number }
+  >();
+  const keyOf = (row: (typeof rows)[number]): string =>
+    groupBy === "day"
+      ? row.pendingAt.slice(0, 10)
+      : groupBy === "recipient"
+        ? row.recipientName
+        : row.kind;
+  let totalSpent = 0n;
+  for (const row of rows) {
+    const key = `${keyOf(row)}|${row.currency}`;
+    const bucket = buckets.get(key) ?? {
+      bucket: keyOf(row),
+      currency: row.currency,
+      spent: 0n,
+      txCount: 0,
+      failed: 0,
+    };
+    if (row.countsAsSpent) {
+      bucket.spent += row.amountSats;
+      bucket.txCount += 1;
+      totalSpent += row.amountSats;
+    } else {
+      bucket.failed += 1;
+    }
+    buckets.set(key, bucket);
+  }
+  for (const bucket of [...buckets.values()].sort((a, b) => a.bucket.localeCompare(b.bucket))) {
+    ctx.out(
+      `  ${bucket.bucket}  ${formatAmount(bucket.spent)} ${bucket.currency}` +
+        `  (${bucket.txCount} tx${bucket.failed > 0 ? `, ${bucket.failed} failed` : ""})`,
+    );
+  }
+  if (buckets.size === 0) {
+    ctx.out(`  (no money requests in the window)`);
+  }
+  ctx.out(``);
+  ctx.out(`total counted as spent: ${formatAmount(totalSpent)}`);
+  ctx.out(``);
+  ctx.out(`recent request(s):`);
+  for (const row of rows.slice(0, limit)) {
+    ctx.out(
+      `  ${row.pendingAt}  ${row.kind} ${formatAmount(row.amountSats)} ${row.currency} → ` +
+        `${row.recipientName}  [${row.state}]  ${row.requestId}` +
+        `${row.txid !== null ? `  ${row.txid.slice(0, 12)}…` : ""}`,
+    );
+  }
+  if (rows.length === 0) {
+    ctx.out(`  (none)`);
+  }
+  return 0;
+}

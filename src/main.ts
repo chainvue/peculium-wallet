@@ -12,6 +12,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { NETWORK_CONFIG } from "@chainvue/verus-typescript-sdk";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { VerusClient } from "verus-rpc";
 
@@ -64,7 +65,9 @@ async function runMcp(): Promise<void> {
   const nodeUrl = process.env["PECULIUM_NODE_URL"] ?? DEFAULT_NODE_URL;
   // verus-rpc >= 0.2: omit credentials entirely for public gateways.
   const client = new VerusClient({ url: nodeUrl });
-  const reader = new PublicNodeReader(client, nativeCurrencyOf(CHAIN));
+  const nativeCurrencyId =
+    CHAIN === "VRSCTEST" ? NETWORK_CONFIG.testnet.chainId : NETWORK_CONFIG.mainnet.chainId;
+  const reader = new PublicNodeReader(client, nativeCurrencyOf(CHAIN), nativeCurrencyId);
   const backend = new LiteBackend({ client, dir, chain: CHAIN });
 
   const server = buildMcpServer({

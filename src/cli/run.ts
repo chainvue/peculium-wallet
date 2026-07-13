@@ -14,7 +14,7 @@ import type { SupportedChain } from "../limits.js";
 import { buildDefaultContext, CliUsageError, type CliContext } from "./context.js";
 import { cmdInit } from "./init.js";
 import { cmdIdentity } from "./identity.js";
-import { cmdDoctor, cmdHistory, cmdStatus } from "./inspect.js";
+import { cmdDoctor, cmdHistory, cmdReport, cmdStatus } from "./inspect.js";
 import { cmdBackup, cmdExportKey, cmdRestore } from "./keyops.js";
 import {
   cmdAllow,
@@ -38,6 +38,8 @@ usage: peculium <command> [options]
   init (--starter | --adopt) [--dry-run]  provision keystore + policy + state
   status                                  policy, caps, usage, ledger overview
   history [--limit N]                     recent money requests + audit events
+  report [--since H] [--recipient N] [--group-by day|recipient|kind]
+                                          spend aggregates + recent requests
   doctor                                  health checks (exit code = failures)
 
   grant <amount> [--currency C] [--ttl 2h]   one-shot session budget
@@ -67,6 +69,7 @@ const COMMANDS: Record<string, Command> = {
   init: cmdInit,
   status: cmdStatus,
   history: cmdHistory,
+  report: cmdReport,
   doctor: cmdDoctor,
   grant: cmdGrant,
   arm: cmdArm,

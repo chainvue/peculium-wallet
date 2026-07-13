@@ -24,10 +24,15 @@
  * malformed answers all read as refusal.
  */
 
+import { V402Client } from "@chainvue/v402-client-fetch";
+import { LocalKeySigner } from "@chainvue/v402-signer-verus";
+import { NETWORK_CONFIG } from "@chainvue/verus-typescript-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { formatAmount, parseAmount } from "verus-rpc";
 import { z } from "zod";
+
+import { readKeystoreFile, unlockKeystore } from "./keystore.js";
 
 import type { AuditLog } from "./audit.js";
 import type { WalletBackend } from "./backend.js";
@@ -252,7 +257,11 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
         "Peculium moves real Verus money under an operator-configured policy you cannot " +
         "change. Recipients are named allowlist entries (wallet_list_recipients); amounts " +
         "are decimal strings. Use wallet_precheck to test an intent before spending. " +
-        "Denials are final — do not retry a denied intent with varied parameters.",
+        "Denials are final — do not retry a denied intent with varied parameters. " +
+        "Orientation: wallet_financial_position is the cockpit (balances, budgets, " +
+        "in-flight, runway); wallet_spending_report answers what was spent (chartable); " +
+        "wallet_prepaid_balance reads your credit at a facilitator. On-chain balance and " +
+        "prepaid facilitator credit are different pools.",
     },
   );
 
@@ -340,12 +349,26 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
 
   // ---------------------------------------------------------------- read tools
 
+  /**
+   * Best-effort friendly name for an i-address (UX-GAPS #10). Display aid
+   * ONLY — names come from the untrusted node and never feed decisions.
+   */
+  async function friendlyName(address: string): Promise<string | null> {
+    try {
+      return await reader.getFriendlyName(address);
+    } catch {
+      return null;
+    }
+  }
+
   server.registerTool(
     "wallet_balance",
     {
       title: "Wallet balance",
       description:
-        "Read the agent wallet's confirmed per-currency balances from the configured node. Read-only.",
+        "Read the agent wallet's confirmed per-currency balances from the configured node. " +
+        "This is the ON-CHAIN wallet balance — PREPAID credit held at facilitators is " +
+        "separate (wallet_prepaid_balance). Read-only.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -358,8 +381,10 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
       }
       try {
         const balances = await reader.getBalances(loaded.policy.agentAddress);
+        const name = await friendlyName(loaded.policy.agentAddress);
         return ok({
           address: loaded.policy.agentAddress,
+          ...(name !== null ? { identityName: name } : {}),
           network: loaded.policy.network,
           balances: balances.map((entry) => ({
             currency: entry.currency,
@@ -376,21 +401,28 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
     "wallet_receive_address",
     {
       title: "Receive address",
-      description: "The agent wallet's own address for receiving funds. Read-only.",
+      description:
+        "The agent wallet's own address for receiving funds — in identity mode both the " +
+        "i-address and its human-readable VerusID name (they are the SAME identity). Read-only.",
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
-    (): ToolResult => {
+    async (): Promise<ToolResult> => {
       let loaded: LoadedPolicy;
       try {
         loaded = refreshPolicy();
       } catch (error) {
         return infraError(`The wallet policy could not be loaded: ${errorDetail(error)}`);
       }
+      const name = await friendlyName(loaded.policy.agentAddress);
       return ok({
         address: loaded.policy.agentAddress,
+        ...(name !== null ? { identityName: name } : {}),
         addressMode: loaded.policy.addressMode,
         network: loaded.policy.network,
+        ...(name !== null
+          ? { note: `${name} and ${loaded.policy.agentAddress} are the same identity — either receives.` }
+          : {}),
       });
     },
   );
@@ -400,13 +432,18 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
     {
       title: "Allowlisted recipients",
       description:
-        "The operator-configured allowlists and per-currency caps: facilitators (topup " +
-        "targets, may auto-approve within budget) and recipients (sends, always human-" +
-        "confirmed). Only these NAMES are valid destinations. Read-only.",
+        "The operator-configured allowlists — the agent's ENTIRE payment universe. Two " +
+        "categories with different trust models: FACILITATORS are prepaid v402 banks " +
+        "(wallet_topup_facilitator deposits credit there; small topups within the shown " +
+        "budget auto-approve because the operator pre-authorized that budget) — " +
+        "RECIPIENTS are arbitrary payout destinations (wallet_send, ALWAYS " +
+        "human-confirmed, because arbitrary sends are how money leaves for good). " +
+        "remainingToday shows what is left of each facilitator's trailing-24h budget " +
+        "right now. Only these NAMES are valid destinations. Read-only.",
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
-    (): ToolResult => {
+    async (): Promise<ToolResult> => {
       let loaded: LoadedPolicy;
       try {
         loaded = refreshPolicy();
@@ -414,6 +451,41 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
         return infraError(`The wallet policy could not be loaded: ${errorDetail(error)}`);
       }
       const policy = loaded.policy;
+      const now = clock();
+      const dayMs = 24 * 60 * 60 * 1000;
+      const facilitators = [];
+      for (const entry of policy.facilitators) {
+        const spentToday = ledger.facilitatorSpentInWindowSats(
+          entry.address,
+          entry.currency,
+          dayMs,
+          now,
+        );
+        const remaining = entry.maxPerDaySats - spentToday;
+        facilitators.push({
+          name: entry.name,
+          address: entry.address,
+          ...(await friendlyName(entry.address).then((n) =>
+            n !== null ? { identityName: n } : {},
+          )),
+          currency: entry.currency,
+          maxPerTx: formatAmount(entry.maxPerTxSats),
+          maxPerDay: formatAmount(entry.maxPerDaySats),
+          remainingToday: formatAmount(remaining > 0n ? remaining : 0n),
+          autoApprove: entry.autoApprove,
+          ...(entry.apiUrl !== undefined ? { apiUrl: entry.apiUrl } : {}),
+        });
+      }
+      const recipients = [];
+      for (const entry of policy.recipients) {
+        recipients.push({
+          name: entry.name,
+          address: entry.address,
+          ...(await friendlyName(entry.address).then((n) =>
+            n !== null ? { identityName: n } : {},
+          )),
+        });
+      }
       return ok({
         network: policy.network,
         currencies: policy.currencies.map((entry) => ({
@@ -422,19 +494,11 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
           maxPerDay: formatAmount(entry.maxPerDaySats),
           maxTotal: formatAmount(entry.maxTotalSats),
         })),
-        facilitators: policy.facilitators.map((entry) => ({
-          name: entry.name,
-          address: entry.address,
-          currency: entry.currency,
-          maxPerTx: formatAmount(entry.maxPerTxSats),
-          maxPerDay: formatAmount(entry.maxPerDaySats),
-          autoApprove: entry.autoApprove,
-        })),
-        recipients: policy.recipients.map((entry) => ({
-          name: entry.name,
-          address: entry.address,
-        })),
-        note: "A currency without a cap entry is not spendable. Sends always require human confirmation.",
+        facilitators,
+        recipients,
+        note:
+          "A currency without a cap entry is not spendable. Sends always require human " +
+          "confirmation; only the operator (CLI) can add or change entries.",
       });
     },
   );
@@ -444,20 +508,39 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
     {
       title: "Transaction status",
       description:
-        "The recorded state of a prior spend by its requestId, refreshing the confirmation " +
-        "count from the node when a txid exists. Read-only against the wallet.",
+        "The recorded state of a prior spend, looked up by requestId OR by txid, refreshing " +
+        "the confirmation count from the node when a txid exists. Flags spends that have " +
+        "been pending unusually long. Read-only against the wallet.",
       inputSchema: {
-        requestId: requestIdSchema.describe("The requestId the spend was submitted with."),
+        requestId: requestIdSchema
+          .optional()
+          .describe("The requestId the spend was submitted with (preferred lookup key)."),
+        txid: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .optional()
+          .describe("Alternative lookup: the broadcast transaction id."),
       },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async ({ requestId }): Promise<ToolResult> => {
-      let snapshot = ledger.getOutcome(requestId);
+    async ({ requestId, txid: txidInput }): Promise<ToolResult> => {
+      let snapshot =
+        requestId !== undefined
+          ? ledger.getOutcome(requestId)
+          : txidInput !== undefined
+            ? (ledger.allSnapshots().find((s) => s.txid === txidInput) ?? null)
+            : null;
+      if (requestId === undefined && txidInput === undefined) {
+        return ok({
+          status: "invalid-input",
+          reason: "Provide a requestId or a txid to look up.",
+        });
+      }
       if (snapshot === null) {
         return ok({
           status: "unknown-request",
-          requestId,
-          reason: "No spend with this requestId was ever attempted on this wallet.",
+          ...(requestId !== undefined ? { requestId } : { txid: txidInput }),
+          reason: "No spend matching this key was ever attempted on this wallet.",
         });
       }
       let nodeNote: string | null = null;
@@ -466,15 +549,403 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
         try {
           const confirmations = await reader.getConfirmations(txid);
           if (confirmations !== null && confirmations > (snapshot.confirmations ?? 0)) {
-            ledger.recordConfirmed(requestId, txid, confirmations);
-            snapshot = ledger.getOutcome(requestId) ?? snapshot;
+            ledger.recordConfirmed(snapshot.requestId, txid, confirmations);
+            snapshot = ledger.getOutcome(snapshot.requestId) ?? snapshot;
           }
         } catch (error) {
           nodeNote = `Confirmation lookup failed; showing the last recorded state: ${errorDetail(error)}`;
         }
       }
       const payload = snapshotPayload(snapshot);
+      // In-flight staleness (UX-GAPS #2/#11): an unconfirmed broadcast older
+      // than ~3 average block times deserves a flag, not silence.
+      if (snapshot.state === "broadcast" && (snapshot.confirmations ?? 0) === 0) {
+        const ageMinutes = Math.floor(
+          (clock().getTime() - new Date(snapshot.pendingAt).getTime()) / 60_000,
+        );
+        if (ageMinutes >= 5) {
+          payload["staleness"] =
+            `Unconfirmed for ${ageMinutes} min (typical: ~1-2 min per confirmation on ` +
+            `VRSCTEST). Testnet block gaps happen; if this persists for hours, the ` +
+            `operator can settle it with \`peculium resolve\`.`;
+        }
+      }
+      // Facilitator credit latency (UX-GAPS #2): confirmed ≠ credited.
+      if (snapshot.kind === "topup" && snapshot.state !== "failed") {
+        payload["creditNote"] =
+          "Facilitators credit deposits after their confirmation depth (commonly ~10 " +
+          "confirmations, ~10 min) — a confirmed tx may take a few more minutes to appear " +
+          "in the prepaid balance.";
+      }
       return ok(nodeNote === null ? payload : { ...payload, nodeNote });
+    },
+  );
+
+  // ------------------------------------------------------------- report tools
+
+  server.registerTool(
+    "wallet_spending_report",
+    {
+      title: "Spending report",
+      description:
+        'Answers "what did I spend money on?" from the wallet\'s append-only ledger: a ' +
+        "LIST of recent money requests (with their requestIds — use them with " +
+        "wallet_transaction_status) plus AGGREGATES bucketed by day, recipient or kind. " +
+        "Amounts counted as spent follow the same fail-closed rule as the caps " +
+        "(broadcast/confirmed/pending/ambiguous count; definite failures do not). " +
+        "Ideal source data for charts. Read-only, wallet-local.",
+      inputSchema: {
+        recipient: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Filter to one allowlist name (facilitator or recipient)."),
+        kind: z.enum(["topup", "send"]).optional().describe("Filter to one request kind."),
+        sinceHours: z
+          .number()
+          .int()
+          .min(1)
+          .max(24 * 365)
+          .optional()
+          .describe("Look-back window in hours (default 168 = 7 days)."),
+        groupBy: z
+          .enum(["day", "recipient", "kind"])
+          .optional()
+          .describe('Aggregation dimension (default "day").'),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(200)
+          .optional()
+          .describe("Max entries in the recent-requests list (default 20)."),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    ({ recipient, kind, sinceHours, groupBy, limit }): ToolResult => {
+      const now = clock();
+      const windowMs = (sinceHours ?? 168) * 60 * 60 * 1000;
+      const sinceMs = now.getTime() - windowMs;
+      const rows = ledger
+        .allSnapshots()
+        .filter((s) => new Date(s.pendingAt).getTime() >= sinceMs)
+        .filter((s) => (recipient === undefined ? true : s.recipientName === recipient))
+        .filter((s) => (kind === undefined ? true : s.kind === kind))
+        .sort((a, b) => (a.pendingAt < b.pendingAt ? 1 : -1));
+
+      const bucketKey = (s: RequestSnapshot): string => {
+        switch (groupBy ?? "day") {
+          case "day":
+            return s.pendingAt.slice(0, 10);
+          case "recipient":
+            return s.recipientName;
+          case "kind":
+            return s.kind;
+        }
+      };
+      interface Bucket {
+        bucket: string;
+        currency: string;
+        spentSats: bigint;
+        txCount: number;
+        failedCount: number;
+        pendingCount: number;
+      }
+      const buckets = new Map<string, Bucket>();
+      for (const s of rows) {
+        const key = `${bucketKey(s)}|${s.currency}`;
+        const bucket =
+          buckets.get(key) ??
+          ({
+            bucket: bucketKey(s),
+            currency: s.currency,
+            spentSats: 0n,
+            txCount: 0,
+            failedCount: 0,
+            pendingCount: 0,
+          } satisfies Bucket);
+        if (s.countsAsSpent) {
+          bucket.spentSats += s.amountSats;
+          bucket.txCount += 1;
+        } else {
+          bucket.failedCount += 1;
+        }
+        if (s.state === "broadcast" || s.state === "pending" || s.state === "ambiguous") {
+          bucket.pendingCount += 1;
+        }
+        buckets.set(key, bucket);
+      }
+
+      let totalSpentSats = 0n;
+      for (const s of rows) {
+        if (s.countsAsSpent) {
+          totalSpentSats += s.amountSats;
+        }
+      }
+
+      return ok({
+        since: new Date(sinceMs).toISOString(),
+        until: now.toISOString(),
+        filter: {
+          ...(recipient !== undefined ? { recipient } : {}),
+          ...(kind !== undefined ? { kind } : {}),
+        },
+        groupBy: groupBy ?? "day",
+        totalRequests: rows.length,
+        totalSpent: formatAmount(totalSpentSats),
+        buckets: [...buckets.values()]
+          .sort((a, b) => a.bucket.localeCompare(b.bucket))
+          .map((b) => ({
+            bucket: b.bucket,
+            currency: b.currency,
+            spent: formatAmount(b.spentSats),
+            txCount: b.txCount,
+            failedCount: b.failedCount,
+            pendingCount: b.pendingCount,
+          })),
+        recent: rows.slice(0, limit ?? 20).map((s) => ({
+          requestId: s.requestId,
+          at: s.pendingAt,
+          kind: s.kind,
+          recipient: s.recipientName,
+          amount: formatAmount(s.amountSats),
+          currency: s.currency,
+          state: s.state,
+          approval: s.approval,
+          txid: s.txid,
+        })),
+      });
+    },
+  );
+
+  server.registerTool(
+    "wallet_financial_position",
+    {
+      title: "Financial position (cockpit)",
+      description:
+        "The whole money picture in one call: on-chain wallet balance, today's spend vs " +
+        "every cap, per-facilitator remaining budgets, in-flight/ambiguous requests, and a " +
+        "burn-rate → runway estimate from the trailing 7 days. PREPAID credit at " +
+        "facilitators is separate (wallet_prepaid_balance — it requires a signed query). " +
+        "Read-only.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async (): Promise<ToolResult> => {
+      let loaded: LoadedPolicy;
+      try {
+        loaded = refreshPolicy();
+      } catch (error) {
+        return infraError(`The wallet policy could not be loaded: ${errorDetail(error)}`);
+      }
+      const policy = loaded.policy;
+      const now = clock();
+      const dayMs = 24 * 60 * 60 * 1000;
+
+      let balances: { currency: string; amount: string }[] = [];
+      let balanceNote: string | null = null;
+      try {
+        const raw = await reader.getBalances(policy.agentAddress);
+        balances = raw.map((entry) => ({
+          currency: entry.currency,
+          amount: formatAmount(entry.sats),
+        }));
+      } catch (error) {
+        balanceNote = `Balance lookup failed: ${errorDetail(error)}`;
+      }
+
+      const caps = policy.currencies.map((entry) => {
+        const spentToday = ledger.spentInWindowSats(entry.currency, dayMs, now);
+        const spentTotal = ledger.totalSpentSats(entry.currency);
+        return {
+          currency: entry.currency,
+          spentToday: formatAmount(spentToday),
+          maxPerDay: formatAmount(entry.maxPerDaySats),
+          remainingToday: formatAmount(
+            entry.maxPerDaySats > spentToday ? entry.maxPerDaySats - spentToday : 0n,
+          ),
+          spentTotal: formatAmount(spentTotal),
+          maxTotal: formatAmount(entry.maxTotalSats),
+        };
+      });
+
+      const facilitators = policy.facilitators.map((entry) => {
+        const spentToday = ledger.facilitatorSpentInWindowSats(
+          entry.address,
+          entry.currency,
+          dayMs,
+          now,
+        );
+        const remaining = entry.maxPerDaySats - spentToday;
+        return {
+          name: entry.name,
+          currency: entry.currency,
+          remainingToday: formatAmount(remaining > 0n ? remaining : 0n),
+          autoApprove: entry.autoApprove,
+          ...(entry.apiUrl !== undefined ? { apiUrl: entry.apiUrl } : {}),
+        };
+      });
+
+      const inFlight = ledger
+        .allSnapshots()
+        .filter((s) => s.state === "pending" || s.state === "broadcast" || s.state === "ambiguous")
+        .map((s) => ({
+          requestId: s.requestId,
+          state: s.state,
+          amount: formatAmount(s.amountSats),
+          currency: s.currency,
+          recipient: s.recipientName,
+          at: s.pendingAt,
+        }));
+
+      // Burn rate over the trailing 7 days → runway of the NATIVE balance.
+      const native = policy.currencies[0]?.currency ?? policy.network;
+      const spent7d = ledger.spentInWindowSats(native, 7 * dayMs, now);
+      const burnPerDaySats = spent7d / 7n;
+      const nativeBalance = balances.find((b) => b.currency === native);
+      let runway: string | null = null;
+      if (burnPerDaySats > 0n && nativeBalance !== undefined) {
+        const balanceSats = parseAmount(nativeBalance.amount);
+        runway = `${(Number(balanceSats) / Number(burnPerDaySats)).toFixed(1)} days at the current burn rate`;
+      }
+
+      return ok({
+        address: policy.agentAddress,
+        network: policy.network,
+        balances,
+        ...(balanceNote !== null ? { balanceNote } : {}),
+        caps,
+        facilitators,
+        inFlight,
+        burn: {
+          window: "7d",
+          currency: native,
+          spent: formatAmount(spent7d),
+          perDay: formatAmount(burnPerDaySats),
+          ...(runway !== null ? { runway } : {}),
+        },
+      });
+    },
+  );
+
+  server.registerTool(
+    "wallet_prepaid_balance",
+    {
+      title: "Prepaid balance at a facilitator",
+      description:
+        "The agent's PREPAID credit at an allowlisted facilitator (its v402 'bank' " +
+        "account) — balance, reserved and available, plus pending deposits where the " +
+        "facilitator reports them. This is credit ALREADY DEPOSITED there via " +
+        "wallet_topup_facilitator; it is not the on-chain wallet balance. The query is " +
+        "signed with the wallet identity's key (only the identity owner can read its " +
+        "account). Requires identity mode and an operator-configured apiUrl for the " +
+        "facilitator. Read-only.",
+      inputSchema: {
+        facilitator: z
+          .string()
+          .min(1)
+          .describe("Allowlist NAME of the facilitator (see wallet_list_recipients)."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async ({ facilitator }): Promise<ToolResult> => {
+      let loaded: LoadedPolicy;
+      try {
+        loaded = refreshPolicy();
+      } catch (error) {
+        return infraError(`The wallet policy could not be loaded: ${errorDetail(error)}`);
+      }
+      const policy = loaded.policy;
+      const entry = policy.facilitators.find((candidate) => candidate.name === facilitator);
+      if (entry === undefined) {
+        return ok({
+          status: "unknown-facilitator",
+          facilitator,
+          reason:
+            `"${facilitator}" is not on the facilitator allowlist. ` +
+            `Call wallet_list_recipients for the configured names.`,
+        });
+      }
+      if (entry.apiUrl === undefined) {
+        return ok({
+          status: "no-api-url",
+          facilitator,
+          reason:
+            `The operator has not recorded an API URL for "${facilitator}" — the balance ` +
+            `cannot be queried. Operator fix: peculium allow facilitator … --api-url <https://…> ` +
+            `(or edit the policy entry).`,
+        });
+      }
+      if (!policy.agentAddress.startsWith("i")) {
+        return ok({
+          status: "identity-required",
+          facilitator,
+          reason:
+            "Facilitator accounts are keyed by VerusID; this wallet runs in starter " +
+            "(R-address) mode, which has no facilitator-readable account. See " +
+            "docs/IDENTITY-RUNBOOK.md for the identity upgrade.",
+        });
+      }
+      const payer = await friendlyName(policy.agentAddress);
+      if (payer === null) {
+        return infraError(
+          `The agent identity's name could not be resolved from the node — cannot build ` +
+            `the signed balance query.`,
+        );
+      }
+      const passphrase = process.env["PECULIUM_KEYSTORE_PASSPHRASE"];
+      if (passphrase === undefined || passphrase === "") {
+        return ok({
+          status: "keystore-locked",
+          facilitator,
+          reason:
+            "PECULIUM_KEYSTORE_PASSPHRASE is not set — the balance query must be signed " +
+            "with the wallet identity's key. Configure the passphrase in the MCP host env.",
+        });
+      }
+      try {
+        const keystore = readKeystoreFile(stateDir);
+        const wif = unlockKeystore(keystore, passphrase);
+        const systemId =
+          policy.network === "VRSCTEST"
+            ? NETWORK_CONFIG.testnet.chainId
+            : NETWORK_CONFIG.mainnet.chainId;
+        const signer = new LocalKeySigner(wif, {
+          identity: { identityAddress: policy.agentAddress, systemId },
+          heightProvider: async () => {
+            const height = await reader.getBlockHeight();
+            if (height === null) {
+              throw new Error("chain height unavailable for the identity signature");
+            }
+            return height;
+          },
+        });
+        const client = new V402Client({
+          identity: payer,
+          signer,
+          facilitator: entry.apiUrl,
+        });
+        const balance = await client.getBalance();
+        // `pending` is the Package-B facilitator extension — surface it when
+        // present without requiring the newer facilitator.
+        const extra = balance as unknown as Record<string, unknown>;
+        return ok({
+          facilitator,
+          apiUrl: entry.apiUrl,
+          identity: payer,
+          balance: balance.balance,
+          reserved: balance.reserved,
+          available: balance.available,
+          ...(typeof extra["pending"] === "string" ? { pending: extra["pending"] } : {}),
+          note:
+            "Deposits credit after the facilitator's confirmation depth — a recent topup " +
+            "may not be reflected yet (wallet_transaction_status shows its confirmations).",
+        });
+      } catch (error) {
+        return infraError(
+          `The prepaid balance could not be read from ${entry.apiUrl}: ${errorDetail(error)}`,
+        );
+      }
     },
   );
 

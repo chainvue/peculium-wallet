@@ -117,7 +117,7 @@ export function cmdAllow(argv: readonly string[], ctx: CliContext): number {
     if (name === undefined || address === undefined) {
       throw new CliUsageError(
         "usage: peculium allow facilitator <name> <address> --max-per-tx X --max-per-day Y " +
-          "[--currency C] [--auto-approve]",
+          "[--currency C] [--auto-approve] [--api-url <https://…>]",
       );
     }
     const currency =
@@ -127,12 +127,23 @@ export function cmdAllow(argv: readonly string[], ctx: CliContext): number {
     parsePositiveAmount(maxPerTx, "--max-per-tx");
     parsePositiveAmount(maxPerDay, "--max-per-day");
     const autoApprove = flags.has("auto-approve");
+    const apiUrlRaw = flags.get("api-url");
+    const apiUrl = typeof apiUrlRaw === "string" ? apiUrlRaw : undefined;
     editPolicy(ctx, `allow facilitator ${name}`, (input) => {
-      input.facilitators.push({ name, address, currency, maxPerTx, maxPerDay, autoApprove });
+      input.facilitators.push({
+        name,
+        address,
+        currency,
+        maxPerTx,
+        maxPerDay,
+        autoApprove,
+        ...(apiUrl !== undefined ? { apiUrl } : {}),
+      });
     });
     ctx.out(
       `facilitator "${name}" → ${address} [${currency}] tx ≤ ${maxPerTx}, day ≤ ${maxPerDay}` +
-        `${autoApprove ? ", auto-approve" : " (confirmation required)"}`,
+        `${autoApprove ? ", auto-approve" : " (confirmation required)"}` +
+        `${apiUrl !== undefined ? `, api ${apiUrl}` : ""}`,
     );
     return 0;
   }

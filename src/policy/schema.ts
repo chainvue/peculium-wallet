@@ -42,6 +42,12 @@ export interface FacilitatorPolicy {
   maxPerTxSats: bigint;
   maxPerDaySats: bigint;
   autoApprove: boolean;
+  /**
+   * The facilitator's HTTP base URL (its v402 API), when the operator
+   * recorded one — enables signed prepaid-balance queries. Optional:
+   * money movement never depends on it.
+   */
+  apiUrl?: string;
 }
 
 /** An allowlisted send recipient (sends always require confirmation). */
@@ -122,6 +128,9 @@ const facilitatorEntrySchema = z
     maxPerTx: capSatsSchema,
     maxPerDay: capSatsSchema,
     autoApprove: z.boolean(),
+    // http(s) base URL of the facilitator's v402 API — display/read aid
+    // for prepaid-balance queries; never part of a money decision.
+    apiUrl: z.string().url().max(512).optional(),
   })
   .transform(
     (entry): FacilitatorPolicy => ({
@@ -131,6 +140,7 @@ const facilitatorEntrySchema = z
       maxPerTxSats: entry.maxPerTx,
       maxPerDaySats: entry.maxPerDay,
       autoApprove: entry.autoApprove,
+      ...(entry.apiUrl !== undefined ? { apiUrl: entry.apiUrl } : {}),
     }),
   );
 

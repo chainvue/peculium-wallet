@@ -151,15 +151,18 @@ const RECEIPT = {
 };
 
 describe("tool surface", () => {
-  it("exposes exactly the seven v1 tools", async () => {
+  it("exposes exactly the ten v1 tools", async () => {
     const { client } = await makeHarness();
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
       "wallet_balance",
+      "wallet_financial_position",
       "wallet_list_recipients",
       "wallet_precheck",
+      "wallet_prepaid_balance",
       "wallet_receive_address",
       "wallet_send",
+      "wallet_spending_report",
       "wallet_topup_facilitator",
       "wallet_transaction_status",
     ]);
@@ -228,12 +231,26 @@ describe("read tools", () => {
         currency: "VRSCTEST",
         maxPerTx: "0.50000000",
         maxPerDay: "2.00000000",
+        remainingToday: "2.00000000",
         autoApprove: true,
       },
     ]);
     expect(payload["recipients"]).toEqual([
       { name: "alice", address: "RAlice1111111111111111111111111111" },
     ]);
+  });
+
+  it("wallet_list_recipients shrinks remainingToday after a topup", async () => {
+    const { client } = await makeHarness();
+    await call(client, "wallet_topup_facilitator", {
+      requestId: "req-remaining-1",
+      amount: "0.5",
+      currency: "VRSCTEST",
+      recipient: "demo-facilitator",
+    });
+    const payload = await call(client, "wallet_list_recipients");
+    const facilitators = payload["facilitators"] as Array<Record<string, unknown>>;
+    expect(facilitators[0]?.["remainingToday"]).toBe("1.50000000");
   });
 });
 
@@ -528,5 +545,118 @@ describe("ElicitationConfirmer", () => {
     const { confirmer } = await bareServerWith("hang");
     expect(confirmer.available()).toBe(true);
     expect(await confirmer.confirm("msg", 100)).toBe("timeout");
+  });
+});
+
+// ─── Package A: report / position / prepaid tools ─────────────────────────
+
+describe("wallet_spending_report", () => {
+  it("lists recent requests with requestIds and aggregates spent amounts", async () => {
+    const { client, backend } = await makeHarness();
+    backend.willSucceed(RECEIPT).willSucceed({ ...RECEIPT, txid: PREV_TXID, changeOutpoint: `${PREV_TXID}:1` });
+    await call(client, "wallet_topup_facilitator", {
+      requestId: "req-report-1",
+      amount: "0.2",
+      currency: "VRSCTEST",
+      recipient: "demo-facilitator",
+    });
+    await call(client, "wallet_topup_facilitator", {
+      requestId: "req-report-2",
+      amount: "0.3",
+      currency: "VRSCTEST",
+      recipient: "demo-facilitator",
+    });
+
+    const report = await call(client, "wallet_spending_report", {});
+    expect(report["totalRequests"]).toBe(2);
+    expect(report["totalSpent"]).toBe("0.50000000");
+    const recent = report["recent"] as Array<Record<string, unknown>>;
+    expect(recent.map((r) => r["requestId"])).toEqual(["req-report-2", "req-report-1"]);
+    const buckets = report["buckets"] as Array<Record<string, unknown>>;
+    expect(buckets).toHaveLength(1); // same day, same currency
+    expect(buckets[0]?.["spent"]).toBe("0.50000000");
+    expect(buckets[0]?.["txCount"]).toBe(2);
+  });
+
+  it("groups by recipient and filters by kind", async () => {
+    const { client, backend } = await makeHarness();
+    backend.willSucceed(RECEIPT);
+    await call(client, "wallet_topup_facilitator", {
+      requestId: "req-report-3",
+      amount: "0.1",
+      currency: "VRSCTEST",
+      recipient: "demo-facilitator",
+    });
+    const report = await call(client, "wallet_spending_report", {
+      groupBy: "recipient",
+      kind: "topup",
+    });
+    const buckets = report["buckets"] as Array<Record<string, unknown>>;
+    expect(buckets[0]?.["bucket"]).toBe("demo-facilitator");
+    const empty = await call(client, "wallet_spending_report", { kind: "send" });
+    expect(empty["totalRequests"]).toBe(0);
+  });
+});
+
+describe("wallet_financial_position", () => {
+  it("reports balances, cap usage, in-flight and burn in one payload", async () => {
+    const { client, backend, reader } = await makeHarness();
+    reader.balances = [{ currency: "VRSCTEST", sats: 100_000_000n }];
+    backend.willSucceed(RECEIPT);
+    await call(client, "wallet_topup_facilitator", {
+      requestId: "req-pos-1",
+      amount: "0.25",
+      currency: "VRSCTEST",
+      recipient: "demo-facilitator",
+    });
+
+    const position = await call(client, "wallet_financial_position", {});
+    expect((position["balances"] as unknown[]).length).toBe(1);
+    const caps = position["caps"] as Array<Record<string, unknown>>;
+    const native = caps.find((c) => c["currency"] === "VRSCTEST");
+    expect(native?.["spentToday"]).toBe("0.25000000");
+    const inFlight = position["inFlight"] as Array<Record<string, unknown>>;
+    expect(inFlight.map((r) => r["requestId"])).toContain("req-pos-1");
+    const burn = position["burn"] as Record<string, string>;
+    expect(burn["spent"]).toBe("0.25000000");
+    expect(burn["runway"]).toContain("days");
+  });
+});
+
+describe("wallet_prepaid_balance", () => {
+  it("explains when the facilitator has no configured apiUrl", async () => {
+    const { client } = await makeHarness();
+    const payload = await call(client, "wallet_prepaid_balance", {
+      facilitator: "demo-facilitator",
+    });
+    expect(payload["status"]).toBe("no-api-url");
+  });
+
+  it("explains starter-mode wallets have no facilitator-readable account", async () => {
+    const { client } = await makeHarness({
+      policy: {
+        facilitators: [
+          {
+            name: "demo-facilitator",
+            address: "RFacilitator1111111111111111111111",
+            currency: "VRSCTEST",
+            maxPerTx: "0.5",
+            maxPerDay: "2",
+            autoApprove: true,
+            apiUrl: "http://127.0.0.1:9",
+          },
+        ],
+      },
+    });
+    const payload = await call(client, "wallet_prepaid_balance", {
+      facilitator: "demo-facilitator",
+    });
+    expect(payload["status"]).toBe("identity-required");
+  });
+
+  it("rejects names that are not allowlisted", async () => {
+    const { client } = await makeHarness();
+    const payload = await call(client, "wallet_prepaid_balance", { facilitator: "nope" });
+    expect(payload["status"]).toBe("unknown-facilitator");
   });
 });
