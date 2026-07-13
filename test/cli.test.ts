@@ -309,6 +309,50 @@ describe("doctor", () => {
     expect(failures).toBeGreaterThan(0);
     expect(harness.out.join("\n")).toContain("ambiguous");
   });
+
+  // Identity mode (E9): keystore R-address != i-address agentAddress is BY
+  // DESIGN — doctor must verify control on-chain instead of failing locally.
+  const ID_ADDRESS = "i5Ej7Bec8AYqxBbFEEd3UCKKhhpqAAm1rh";
+
+  function switchToIdentityMode(harness: Harness): void {
+    const policyPath = path.join(harness.dir, "policy.json");
+    const policy = JSON.parse(fs.readFileSync(policyPath, "utf8")) as Record<string, unknown>;
+    policy["agentAddress"] = ID_ADDRESS;
+    policy["addressMode"] = "verusid";
+    fs.writeFileSync(policyPath, JSON.stringify(policy, null, 2));
+  }
+
+  it("identity mode: verifies control on-chain instead of flagging the address split", async () => {
+    const harness = await initialized();
+    switchToIdentityMode(harness);
+    respondHealthyNode(harness, ID_ADDRESS);
+    harness.transport.respondJson(
+      "getidentity",
+      JSON.stringify({
+        status: "active",
+        identity: { primaryaddresses: [harness.address], minimumsignatures: 1 },
+      }),
+    );
+    const failures = await cmdDoctor([], harness.ctx);
+    expect(failures).toBe(0);
+    expect(harness.out.join("\n")).toContain("identity control verified on-chain");
+  });
+
+  it("identity mode: FAILS when the keystore key is no longer a primary address", async () => {
+    const harness = await initialized();
+    switchToIdentityMode(harness);
+    respondHealthyNode(harness, ID_ADDRESS);
+    harness.transport.respondJson(
+      "getidentity",
+      JSON.stringify({
+        status: "active",
+        identity: { primaryaddresses: ["RSomeOtherRotatedPrimaryAddress111"], minimumsignatures: 1 },
+      }),
+    );
+    const failures = await cmdDoctor([], harness.ctx);
+    expect(failures).toBeGreaterThan(0);
+    expect(harness.out.join("\n")).toContain("NOT a primary address");
+  });
 });
 
 describe("resolve", () => {

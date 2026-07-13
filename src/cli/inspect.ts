@@ -165,9 +165,17 @@ export async function cmdDoctor(_argv: readonly string[], ctx: CliContext): Prom
   }
 
   // 2. Keystore present, address consistent, unlockable when possible.
+  // Identity mode (i-address agentAddress): the keystore holds the
+  // identity's PRIMARY key, so the addresses differ BY DESIGN — control is
+  // verified on-chain in the node section below (same rule the backend
+  // enforces at spend time).
+  let keystoreAddress: string | null = null;
   try {
     const keystore = readKeystoreFile(ctx.dir);
-    if (agentAddress !== null && keystore.address !== agentAddress) {
+    keystoreAddress = keystore.address;
+    if (agentAddress !== null && agentAddress.startsWith("i")) {
+      ok(`keystore.json present (primary key ${keystore.address} for identity ${agentAddress})`);
+    } else if (agentAddress !== null && keystore.address !== agentAddress) {
       fail(`keystore address ${keystore.address} != policy agentAddress ${agentAddress}`);
     } else {
       ok(`keystore.json present (address ${keystore.address})`);
@@ -241,6 +249,28 @@ export async function cmdDoctor(_argv: readonly string[], ctx: CliContext): Prom
           `${utxos.length} UTXOs on the agent address — heavily fragmented wallets ` +
             `build larger transactions (higher fees); consider consolidating`,
         );
+      }
+      // Identity mode: verify on-chain control — the exact rule the backend
+      // enforces at spend time (active, single-sig, keystore key primary).
+      if (agentAddress.startsWith("i") && keystoreAddress !== null) {
+        const lookup = (await client.call("getidentity", [agentAddress])) as {
+          status?: string;
+          identity?: { primaryaddresses?: string[]; minimumsignatures?: number };
+        };
+        const primaries = lookup.identity?.primaryaddresses ?? [];
+        const minSigs = lookup.identity?.minimumsignatures ?? 0;
+        if (lookup.status !== "active") {
+          fail(`agent identity ${agentAddress} is not active (status ${String(lookup.status)}) — spends will refuse`);
+        } else if (minSigs !== 1) {
+          fail(`agent identity requires ${minSigs} signatures — only single-sig is supported in v1`);
+        } else if (!primaries.includes(keystoreAddress)) {
+          fail(
+            `keystore key ${keystoreAddress} is NOT a primary address of ${agentAddress} — ` +
+              `recovered/rotated identity? Spends will refuse`,
+          );
+        } else {
+          ok(`identity control verified on-chain (active, single-sig, keystore key is primary)`);
+        }
       }
     }
   } catch (error) {
