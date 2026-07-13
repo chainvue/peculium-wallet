@@ -1,18 +1,14 @@
-// E6 gated live test: attempt to register a REAL throwaway VerusID —
-// commitment, registration, verification.
+// E6 gated live proof: register a REAL throwaway VerusID FULLY daemon-free —
+// commitment, registration and verification all through the public testnet
+// node. The LAN daemon only funds the throwaway key (setup).
 //
-// ⚠️ CURRENTLY REPRODUCES A KNOWN BLOCKER (RISKS.md → Etappe 6): the
-// commitment step succeeds daemon-free, but the registration broadcast is
-// rejected with "Transaction has absurd fees" — an identity-registration
-// specific guard in Verus's sendrawtransaction that allowhighfees does not
-// lift, on ANY node (proven by contrast with a plain 100-coin-fee tx, which
-// IS accepted with the flag). This test therefore FAILS at the registration
-// step by design until the broadcast path is unblocked. It stays gated so it
-// never runs in CI; run it to re-verify the blocker or confirm a fix.
+// (Historical note: this test once failed with "Transaction has absurd
+// fees" — that was CLIENT-side, utxo-lib's fee-rate cap at build(), fixed in
+// the SDK. The daemon itself exempts identity definitions from its
+// absurd-fee check, so the 1-arg public-gateway broadcast works.)
 //
-// COST when run: the commitment dust; the registration never lands, so the
-// ~100 tVRSC protocol fee is NOT burned. Gates: PECULIUM_LIVE_ID=1 +
-// VERUS_RPC_URL/USER/PASS. Runtime ~3-6 min.
+// COST: burns ~100 tVRSC (protocol registration fee) plus dust. Gates:
+// PECULIUM_LIVE_ID=1 + VERUS_RPC_URL/USER/PASS. Runtime ~3-6 min.
 
 import { VerusSDK } from "@chainvue/verus-typescript-sdk";
 import { VerusClient } from "verus-rpc";
@@ -75,13 +71,10 @@ describe.skipIf(!enabled)("daemon-free identity registration (public node)", () 
         await sleep(5_000);
       }
 
-      // Reads + commitment via the PUBLIC node (daemon-free); the
-      // registration tx pays the protocol fee as a high fee and needs
-      // allowhighfees, which the public gateway rejects — so it broadcasts
-      // through the LAN node. Everything is still OFFLINE-signed.
+      // EVERYTHING through the public node: reads, commitment AND the
+      // registration broadcast — the full daemon-free, offline-signed proof.
       const result = await provisionIdentity({
         client: publicClient,
-        registrationClient: lan,
         chain: "VRSCTEST",
         wif,
         address,

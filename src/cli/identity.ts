@@ -85,20 +85,11 @@ export async function cmdIdentity(argv: readonly string[], ctx: CliContext): Pro
     }
   }
 
-  // KNOWN BLOCKER: the registration broadcast currently fails on ANY node
-  // ("Transaction has absurd fees" — an identity-specific guard allowhighfees
-  // does not lift; see RISKS.md → Etappe 6). --registration-node lets the
-  // operator target their own node for when the broadcast path is unblocked;
-  // it does NOT work around the guard today.
+  // The registration broadcasts fine through public gateways (the daemon
+  // exempts identity definitions from its absurd-fee check); the optional
+  // --registration-node targets a different node for the registration tx
+  // only, as an escape hatch for gateways with stricter broadcast policies.
   const registrationNode = flags.get("registration-node");
-  ctx.err(``);
-  ctx.err(
-    `WARNING: identity registration is a KNOWN BLOCKER — the registration ` +
-      `broadcast is rejected with "Transaction has absurd fees" on every node ` +
-      `(an identity-specific guard that allowhighfees does not lift). The ` +
-      `commitment will be sent, but registration will fail. See ` +
-      `docs/IDENTITY-RUNBOOK.md / RISKS.md before proceeding.`,
-  );
 
   const passphrase =
     ctx.env["PECULIUM_KEYSTORE_PASSPHRASE"] ??

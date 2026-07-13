@@ -31,16 +31,12 @@ export interface ProvisionIdentityParams {
   /** Reads + commitment broadcast (a public gateway is fine here). */
   client: VerusClient;
   /**
-   * Broadcast client for the REGISTRATION tx. The registration pays the
-   * protocol fee as an implicit miner fee (~100 native), and Verus's
-   * `sendrawtransaction` applies an identity-registration-specific
-   * absurd-fee guard that `allowhighfees` does NOT lift — even on a node you
-   * control. See RISKS.md → Etappe 6: this broadcast is a KNOWN BLOCKER.
-   * The commitment (step 1) and all reads are daemon-free and work; the
-   * registration broadcast below currently fails with "Transaction has
-   * absurd fees" regardless of which node it targets. This param is kept so
-   * the flow is ready the moment the broadcast path is unblocked (e.g. a
-   * daemon `registeridentity`-style submission that bypasses the guard).
+   * Optional separate broadcast client for the REGISTRATION tx. Not needed
+   * for public gateways: the registration burns the protocol fee as an
+   * implicit miner fee (~100 native), and the daemon EXEMPTS recognized
+   * identity definitions from its absurd-fee check (IS_HIGH_FEE flag in
+   * pbaas/reserves.cpp), so a plain 1-arg `sendrawtransaction` suffices.
+   * Kept as an escape hatch for gateways with other broadcast policies.
    * Defaults to `client`.
    */
   registrationClient?: VerusClient;
@@ -156,13 +152,16 @@ export async function provisionIdentity(
   });
   onStatus(`commitment built (identity will be ${commitment.identityAddress})`);
   await params.client.call("sendrawtransaction", [commitment.signedTx]);
-  const deadline = Date.now() + timeoutMs;
+  // Each confirmation wait gets its OWN deadline: testnet block gaps of
+  // several minutes are normal, and a shared budget once ate the whole
+  // registration wait after a slow commitment (2026-07-13 live run — the
+  // registration confirmed on-chain right after the test gave up).
   await waitForConfirmation(
     params.client,
     commitment.txid,
     "name commitment",
     pollMs,
-    deadline,
+    Date.now() + timeoutMs,
     onStatus,
   );
 
@@ -198,22 +197,20 @@ export async function provisionIdentity(
     ...(params.referral !== undefined ? { referralChain: [params.referral] } : {}),
   });
   onStatus(`registration built (burns the protocol fee)`);
-  // KNOWN BLOCKER (investigated 2026-07-13): the registration fee is an
-  // implicit miner fee (~100 native, matching on-chain registrations), and
-  // Verus's sendrawtransaction applies an identity-registration-specific
-  // absurd-fee guard that allowhighfees does NOT lift — proven by contrast
-  // with a plain 100-coin-fee tx, which IS accepted with the flag on the
-  // same node. This call therefore throws "Transaction has absurd fees".
-  // Left in place (with the flag) as the exact reproduction; see RISKS.md
-  // → Etappe 6 for the evidence and the unblock options.
+  // The ~100-native protocol fee rides as an implicit miner fee, matching
+  // on-chain registrations. No allowhighfees needed: the daemon exempts
+  // recognized identity definitions from its absurd-fee check (IS_HIGH_FEE,
+  // pbaas/reserves.cpp), and public gateways whitelist only the 1-arg form
+  // anyway. (The earlier "absurd fees" failure was CLIENT-side — utxo-lib's
+  // fee-rate cap at build(), fixed in the SDK; see RISKS.md → Etappe 6.)
   const registrationClient = params.registrationClient ?? params.client;
-  await registrationClient.call("sendrawtransaction", [registration.signedTx, true]);
+  await registrationClient.call("sendrawtransaction", [registration.signedTx]);
   await waitForConfirmation(
     params.client,
     registration.txid,
     "identity registration",
     pollMs,
-    deadline,
+    Date.now() + timeoutMs,
     onStatus,
   );
 

@@ -81,9 +81,8 @@ remaining budget. `peculium history` shows everything it tried.
 `init` · `status` · `history` · `doctor` · `grant` (session budget) ·
 `arm`/`disarm` · `allow`/`revoke` (recipients & facilitators) · `set`
 (caps, rate, timeouts) · `resolve` (settle ambiguous broadcasts, repair a
-torn ledger tail) · `identity create` (VerusID registration — **experimental,
-currently blocked**, see below) · `export-key` · `backup`/`restore` (one
-encrypted archive).
+torn ledger tail) · `identity create` (daemon-free VerusID registration) ·
+`export-key` · `backup`/`restore` (one encrypted archive).
 
 Run `peculium help` for the full syntax.
 
@@ -105,13 +104,6 @@ trust model), value-based caps, spending identity-HELD funds (the agent
 spends from the identity's primary R-address), DEX conversions, VerusPay
 invoices, mainnet. The v2 hardening step is a local signer daemon that
 moves the key out of the LLM-adjacent process entirely.
-
-**VerusID registration is a known blocker, not a supported feature.** The
-name commitment and all reads run daemon-free, but the offline-signed
-registration broadcast is rejected by Verus's `sendrawtransaction` with
-"Transaction has absurd fees" — an identity-specific guard `allowhighfees`
-does not lift (proven 2026-07-13; see RISKS.md → Etappe 6). Starter mode
-(a plain R-address, which needs no registration) is the supported v1 path.
 
 Design analysis and threat model: [DESIGN.md](./DESIGN.md) · decision log:
 [RISKS.md](./RISKS.md) · ecosystem strategy: [ECOSYSTEM.md](./ECOSYSTEM.md)
