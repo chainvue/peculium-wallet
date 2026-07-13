@@ -33,6 +33,10 @@ code, not in configuration. Do not point it at funds you care about.
   MIGHT have moved money counts against the caps until proven otherwise.
 - **Lite architecture**: local offline signing (scrypt+AES-256-GCM
   keystore) + public Verus nodes. No daemon, no chain sync, no wallet RPC.
+- **Identity mode**: the agent's funds can be held BY its VerusID; control
+  is re-verified on-chain at every spend, so a **revocation from your cold
+  wallet stops spending immediately** and a recovered identity refuses the
+  old key.
 
 **Honest limits** (the threat model in one paragraph): the spending key
 lives in the wallet process. A fully compromised host = key exfiltrated =
@@ -100,10 +104,9 @@ Run `peculium help` for the full syntax.
 ## Explicit v1 non-goals
 
 Remote/hosted agents (stdio only — where the key lives is a different
-trust model), value-based caps, spending identity-HELD funds (the agent
-spends from the identity's primary R-address), DEX conversions, VerusPay
-invoices, mainnet. The v2 hardening step is a local signer daemon that
-moves the key out of the LLM-adjacent process entirely.
+trust model), value-based caps, multi-signature identities, DEX
+conversions, VerusPay invoices, mainnet. The v2 hardening step is a local
+signer daemon that moves the key out of the LLM-adjacent process entirely.
 
 Design analysis and threat model: [DESIGN.md](./DESIGN.md) · decision log:
 [RISKS.md](./RISKS.md) · ecosystem strategy: [ECOSYSTEM.md](./ECOSYSTEM.md)

@@ -20,7 +20,12 @@
  * process"); the v2 signer daemon is the fix.
  */
 
-import { NETWORK_CONFIG, VerusSDK, utils as sdkUtils } from "@chainvue/verus-typescript-sdk";
+import {
+  NETWORK_CONFIG,
+  VerusSDK,
+  identity as sdkIdentity,
+  utils as sdkUtils,
+} from "@chainvue/verus-typescript-sdk";
 import { TransportError, VerusRpcError, type VerusClient } from "verus-rpc";
 
 import {
@@ -103,22 +108,26 @@ export class LiteBackend implements WalletBackend {
         `the keystore could not be read: ${errorDetail(error)}. No funds were moved.`,
       );
     }
-    if (keystore.address !== instruction.fromAddress) {
+    if (instruction.fromAddress.startsWith("R")) {
+      if (keystore.address !== instruction.fromAddress) {
+        throw new SpendRejectedError(
+          "build",
+          `the keystore holds the key for ${keystore.address}, but the policy's agent ` +
+            `address is ${instruction.fromAddress} — refusing to sign (keystore/policy drift).`,
+        );
+      }
+    } else if (instruction.fromAddress.startsWith("i")) {
+      // Identity mode: funds are HELD BY the VerusID (P2ID outputs, ring 4
+      // live-proven) and signed with the keystore's primary key. Control is
+      // verified ON-CHAIN at spend time — which also makes a revocation an
+      // immediately effective local spend stop, and a recovered (rotated)
+      // identity refuse the old key.
+      await this.verifyIdentityControl(instruction.fromAddress, keystore.address);
+    } else {
       throw new SpendRejectedError(
         "build",
-        `the keystore holds the key for ${keystore.address}, but the policy's agent ` +
-          `address is ${instruction.fromAddress} — refusing to sign (keystore/policy drift).`,
-      );
-    }
-    if (!instruction.fromAddress.startsWith("R")) {
-      // Identity-HELD funds (P2ID inputs) are not live-proven yet; the v1
-      // agent address is the identity's primary R-address. Refusing here is
-      // cheaper than discovering it at the node (RISKS.md, E6).
-      throw new SpendRejectedError(
-        "build",
-        `agent address ${instruction.fromAddress} is not a transparent R-address; ` +
-          `spending identity-held funds is not supported in v1 — use the identity's ` +
-          `primary R-address as the agent address.`,
+        `agent address ${instruction.fromAddress} is neither a transparent R-address ` +
+          `nor an identity i-address — refusing to sign.`,
       );
     }
 
@@ -267,9 +276,59 @@ export class LiteBackend implements WalletBackend {
   }
 
   /**
+   * Verify AT SPEND TIME that the keystore's key controls the agent
+   * identity — read-only, every failure is a definite no-op. This makes a
+   * REVOCATION an immediately effective spend stop on this wallet, and a
+   * RECOVERED (key-rotated) identity refuse the old key. Fail closed on any
+   * read failure: an unreachable node must never default to "assume fine".
+   */
+  private async verifyIdentityControl(iAddress: string, keyAddress: string): Promise<void> {
+    let lookup: {
+      status?: string;
+      identity?: { primaryaddresses?: string[]; minimumsignatures?: number };
+    };
+    try {
+      lookup = (await this.deps.client.call("getidentity", [iAddress])) as typeof lookup;
+    } catch (error) {
+      throw new SpendRejectedError(
+        "build",
+        `the agent identity ${iAddress} could not be read from the node: ` +
+          `${errorDetail(error)}. Refusing to sign (fail closed). No funds were moved.`,
+      );
+    }
+    if (lookup.status !== "active") {
+      throw new SpendRejectedError(
+        "build",
+        `the agent identity ${iAddress} is not active on-chain ` +
+          `(status: ${lookup.status ?? "unknown"}) — a revoked identity must never sign. ` +
+          `No funds were moved.`,
+      );
+    }
+    const primaries = lookup.identity?.primaryaddresses ?? [];
+    const minSigs = lookup.identity?.minimumsignatures ?? 0;
+    if (minSigs !== 1) {
+      throw new SpendRejectedError(
+        "build",
+        `the agent identity ${iAddress} requires ${minSigs} signatures; ` +
+          `only single-signature identities are supported in v1. No funds were moved.`,
+      );
+    }
+    if (!primaries.includes(keyAddress)) {
+      throw new SpendRejectedError(
+        "build",
+        `the keystore key (${keyAddress}) is not a primary address of ${iAddress} — ` +
+          `the identity may have been recovered to a new key. Refusing to sign. ` +
+          `No funds were moved.`,
+      );
+    }
+  }
+
+  /**
    * Recover clean unconfirmed own-change outpoints from the mempool. Own
-   * change is always plain P2PKH to our own address, so the script is
-   * derivable locally; amounts come from the mempool deltas.
+   * change goes to our own agent address: plain P2PKH for an R-address, the
+   * standard P2ID script for an identity (byte-identical to the chain's own
+   * pay-to-identity outputs) — both derivable locally; amounts come from
+   * the mempool deltas.
    */
   private async fetchUnconfirmedChange(
     instruction: SpendInstruction,
@@ -278,7 +337,9 @@ export class LiteBackend implements WalletBackend {
     const deltas = await this.deps.client.addressIndex.getAddressMempool({
       addresses: [instruction.fromAddress],
     });
-    const script = sdkUtils.addressToScriptPubKey(instruction.fromAddress).toString("hex");
+    const script = instruction.fromAddress.startsWith("i")
+      ? sdkIdentity.identityPaymentScript(instruction.fromAddress).toString("hex")
+      : sdkUtils.addressToScriptPubKey(instruction.fromAddress).toString("hex");
     const wantedSet = new Set(wanted);
     const out: SdkUtxo[] = [];
     for (const delta of deltas) {

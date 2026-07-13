@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { utils as sdkUtils } from "@chainvue/verus-typescript-sdk";
+import { identity as sdkIdentity, utils as sdkUtils } from "@chainvue/verus-typescript-sdk";
 import { MockTransport, VerusClient } from "verus-rpc";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -267,5 +267,130 @@ describe("LiteBackend uncertainty (fail closed)", () => {
     );
     // The broadcast WAS attempted — exactly once, never retried blindly.
     expect(broadcastCalls(transport)).toHaveLength(1);
+  });
+});
+
+// ─── Identity mode (E9): the agent address is a VerusID i-address ────────
+// Funds are P2ID outputs held by the identity, signed with the keystore's
+// primary key (SDK ring 4 proved the input type live). Control is verified
+// on-chain at spend time — revocation/rotation must stop spending HERE.
+
+const ID_ADDRESS = "i5Ej7Bec8AYqxBbFEEd3UCKKhhpqAAm1rh";
+const P2ID_SCRIPT = sdkIdentity.identityPaymentScript(ID_ADDRESS).toString("hex");
+
+function p2idUtxoJson(txidByte: string, satoshis: number, vout = 0): string {
+  return JSON.stringify({
+    address: ID_ADDRESS,
+    txid: txidByte.repeat(32),
+    outputIndex: vout,
+    script: P2ID_SCRIPT,
+    satoshis,
+    height: 100,
+  });
+}
+
+function respondIdentity(
+  transport: MockTransport,
+  overrides: {
+    status?: string;
+    primaryaddresses?: string[];
+    minimumsignatures?: number;
+  } = {},
+): void {
+  transport.respondJson(
+    "getidentity",
+    JSON.stringify({
+      status: overrides.status ?? "active",
+      identity: {
+        primaryaddresses: overrides.primaryaddresses ?? [TEST_ADDRESS],
+        minimumsignatures: overrides.minimumsignatures ?? 1,
+      },
+    }),
+  );
+}
+
+describe("LiteBackend identity mode (i-address agent)", () => {
+  it("verifies control on-chain, signs P2ID inputs, change returns to the identity", async () => {
+    const { backend, transport } = makeBackend();
+    respondIdentity(transport);
+    respondUtxos(transport, [p2idUtxoJson("aa", 200_000_000)]);
+    transport.respondJson("sendrawtransaction", `"${BROADCAST_TXID}"`);
+
+    const receipt = await backend.executeSpend(instruction({ fromAddress: ID_ADDRESS }));
+
+    expect(receipt.txid).toBe(BROADCAST_TXID);
+    const sends = broadcastCalls(transport);
+    expect(sends).toHaveLength(1);
+    const summary = sdkUtils.summarizeSignedTransaction(sends[0]?.params[0] as string, "testnet");
+    // Recipient paid exactly; change decodes to the i-address (P2ID output).
+    const paid = summary.outputs.find((o) => o.address === TEST_ADDRESS_B);
+    expect(paid?.valueSat).toBe(100_000_000);
+    const change = summary.outputs.find((o) => o.address === ID_ADDRESS);
+    expect(change).toBeDefined();
+    expect(receipt.changeOutpoint).toBe(
+      `${BROADCAST_TXID}:${summary.outputs.findIndex((o) => o.address === ID_ADDRESS)}`,
+    );
+    // The control check actually ran.
+    expect(transport.calls.some((c) => c.method === "getidentity")).toBe(true);
+  });
+
+  it("REFUSES to sign for a revoked identity (revocation = immediate spend stop)", async () => {
+    const { backend, transport } = makeBackend();
+    respondIdentity(transport, { status: "revoked" });
+
+    await expect(
+      backend.executeSpend(instruction({ fromAddress: ID_ADDRESS })),
+    ).rejects.toSatisfy(
+      (e) =>
+        e instanceof SpendRejectedError && e.stage === "build" && /revoked|active/.test(e.message),
+    );
+    expect(broadcastCalls(transport)).toHaveLength(0);
+  });
+
+  it("REFUSES the old key after identity recovery (primary rotated away)", async () => {
+    const { backend, transport } = makeBackend();
+    respondIdentity(transport, { primaryaddresses: [TEST_ADDRESS_B] });
+
+    await expect(
+      backend.executeSpend(instruction({ fromAddress: ID_ADDRESS })),
+    ).rejects.toSatisfy(
+      (e) => e instanceof SpendRejectedError && /not a primary address/.test(e.message),
+    );
+    expect(broadcastCalls(transport)).toHaveLength(0);
+  });
+
+  it("REFUSES multi-signature identities in v1", async () => {
+    const { backend, transport } = makeBackend();
+    respondIdentity(transport, { minimumsignatures: 2 });
+
+    await expect(
+      backend.executeSpend(instruction({ fromAddress: ID_ADDRESS })),
+    ).rejects.toSatisfy(
+      (e) => e instanceof SpendRejectedError && /single-signature/.test(e.message),
+    );
+    expect(broadcastCalls(transport)).toHaveLength(0);
+  });
+
+  it("fails CLOSED when the identity cannot be read from the node", async () => {
+    const { backend, transport } = makeBackend();
+    transport.respondError("getidentity", -5, "identity not found");
+
+    await expect(
+      backend.executeSpend(instruction({ fromAddress: ID_ADDRESS })),
+    ).rejects.toSatisfy(
+      (e) => e instanceof SpendRejectedError && e.stage === "build" && /fail closed/.test(e.message),
+    );
+    expect(broadcastCalls(transport)).toHaveLength(0);
+  });
+
+  it("rejects agent addresses that are neither R nor i", async () => {
+    const { backend, transport } = makeBackend();
+
+    await expect(
+      backend.executeSpend(instruction({ fromAddress: "zs1notsupported" })),
+    ).rejects.toSatisfy(
+      (e) => e instanceof SpendRejectedError && /neither a transparent R-address/.test(e.message),
+    );
+    expect(broadcastCalls(transport)).toHaveLength(0);
   });
 });
