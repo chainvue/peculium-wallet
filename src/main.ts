@@ -105,10 +105,12 @@ if (command === "mcp") {
     fail(error instanceof Error ? error.message : String(error));
   });
 } else {
-  process.stderr.write(
-    `peculium ${PECULIUM_VERSION}\n` +
-      `usage: peculium mcp    start the MCP server on stdio\n` +
-      `The operator CLI (init, status, grant, ...) arrives in Etappe 5.\n`,
-  );
-  process.exit(1);
+  // Everything else is the operator CLI (E5).
+  import("./cli/run.js")
+    .then(async ({ runCli }) => {
+      process.exit(await runCli(process.argv.slice(2)));
+    })
+    .catch((error: unknown) => {
+      fail(error instanceof Error ? error.message : String(error));
+    });
 }
