@@ -1,2 +1,5 @@
 minimumReleaseAgeExclude:
-  - verus-rpc@0.1.1
+  - verus-rpc@0.1.1 || 0.2.0
+  - '@chainvue/v402-client-fetch@0.2.0'
+  - '@chainvue/v402-protocol@0.2.0'
+  - '@chainvue/verus-sdk@0.4.1'
