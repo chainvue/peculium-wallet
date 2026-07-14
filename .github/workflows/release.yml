@@ -112,12 +112,20 @@ jobs:
           done
           echo "version never appeared on registry"; exit 1
 
-      - name: Fresh-machine acceptance — npx init + doctor against the public node
+      - name: Fresh-machine acceptance — install + init + doctor against the public node
         env:
           PECULIUM_KEYSTORE_PASSPHRASE: smoke-passphrase-ci-only
-          PECULIUM_DIR: /tmp/peculium-smoke
         run: |
-          npx -y "@chainvue/peculium-wallet@${{ steps.v.outputs.version }}" init --starter --dir /tmp/peculium-smoke
+          # Install into a throwaway project and run the CLI bin directly.
+          # NOT `npx <pkg> <cmd>`: npx guesses the bin name (the bin is
+          # `peculium`, not the unscoped package name `peculium-wallet`) and
+          # its install cache is flaky — both produce spurious
+          # "peculium: not found" (exit 127) failures.
+          mkdir -p /tmp/pecu-smoke-app && cd /tmp/pecu-smoke-app
+          npm init -y >/dev/null
+          npm install "@chainvue/peculium-wallet@${{ steps.v.outputs.version }}"
+          BIN=./node_modules/.bin/peculium
+          "$BIN" init --starter --dir /tmp/peculium-smoke
           # doctor exit code = number of failed checks; a fresh wallet warns
           # (0 balance) but must not FAIL any check.
-          npx -y "@chainvue/peculium-wallet@${{ steps.v.outputs.version }}" doctor --dir /tmp/peculium-smoke
+          "$BIN" doctor --dir /tmp/peculium-smoke
