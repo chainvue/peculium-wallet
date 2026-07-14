@@ -186,12 +186,14 @@ export function writePolicyInput(
 /** A read-only, point-in-time fold of ledger.jsonl (no lock taken). */
 export interface LedgerSnapshotRow {
   requestId: string;
-  kind: "topup" | "send";
+  kind: "topup" | "send" | "paid-fetch";
   recipientName: string;
+  /** Resolved destination: recipient/facilitator address, or service origin. */
+  recipientAddress: string;
   currency: string;
   amountSats: bigint;
   pendingAt: string;
-  state: "pending" | "broadcast" | "confirmed" | "failed" | "ambiguous" | "resolved";
+  state: "pending" | "broadcast" | "confirmed" | "failed" | "settled" | "ambiguous" | "resolved";
   txid: string | null;
   countsAsSpent: boolean;
 }
@@ -243,6 +245,7 @@ export function readLedgerSnapshot(dir: string): LedgerSnapshot {
         requestId: record.requestId,
         kind: record.kind,
         recipientName: record.recipientName,
+        recipientAddress: record.recipientAddress,
         currency: record.currency,
         amountSats: BigInt(record.amountSats),
         pendingAt: record.at,
@@ -267,6 +270,9 @@ export function readLedgerSnapshot(dir: string): LedgerSnapshot {
       case "failed":
         row.state = "failed";
         row.countsAsSpent = false;
+        break;
+      case "settled":
+        row.state = "settled";
         break;
       case "ambiguous":
         row.state = "ambiguous";

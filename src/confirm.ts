@@ -14,7 +14,7 @@
 
 import { formatAmount } from "verus-rpc";
 
-import type { SpendIntent } from "./intents.js";
+import type { PaidFetchIntent, SpendIntent } from "./intents.js";
 import type { Policy } from "./policy/schema.js";
 
 /**
@@ -65,6 +65,44 @@ export function renderConfirmMessage(intent: SpendIntent, context: ConfirmContex
     `Network: ${context.policy.network}`,
     "Approving moves real funds immediately and cannot be undone. " +
       "Approve only if you expect this exact payment.",
+  ].join("\n");
+}
+
+/** Context for a paid-fetch confirmation (services confirm per call only
+ * when the operator disabled autoApprove for the entry). */
+export interface PaidFetchConfirmContext {
+  policy: Policy;
+  /** Sats already counted against the service's trailing-24h budget. */
+  serviceSpentInWindowSats: bigint;
+  /** The service's per-day budget the usage line is measured against. */
+  serviceCaps: { maxPerDaySats: bigint };
+}
+
+/**
+ * Render the confirmation for an off-chain paid-fetch. The money-relevant
+ * lines (amount, service, origin) come from policy + the vetted offer. The
+ * method/path are the agent's request — schema-validated to printable
+ * ASCII and shown truncated, because the human is approving exactly that
+ * call; the amount line stays the authoritative money statement.
+ */
+export function renderPaidFetchConfirmMessage(
+  intent: PaidFetchIntent,
+  context: PaidFetchConfirmContext,
+): string {
+  const afterSpendSats = context.serviceSpentInWindowSats + intent.amountSats;
+  const target = `${intent.method} ${intent.path.slice(0, 200)}${intent.path.length > 200 ? "…" : ""}`;
+  return [
+    "Peculium payment confirmation",
+    "Action: Pay a v402 API call from PREPAID credit (paid-fetch)",
+    `Amount: ${formatAmount(intent.amountSats)} ${intent.currency}`,
+    `Service: ${intent.recipientName} (${intent.recipientAddress})`,
+    `Request: ${target}`,
+    "Why confirmation is needed: service-not-auto-approve",
+    `24h service budget after this call: ${formatAmount(afterSpendSats)} of ` +
+      `${formatAmount(context.serviceCaps.maxPerDaySats)} ${intent.currency}`,
+    `Network: ${context.policy.network}`,
+    "Approving debits prepaid credit immediately and cannot be undone. " +
+      "Approve only if you expect this exact API call.",
   ].join("\n");
 }
 

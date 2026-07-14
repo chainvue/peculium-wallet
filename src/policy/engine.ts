@@ -19,10 +19,21 @@
 
 import { formatAmount } from "verus-rpc";
 
-import { intentFingerprint, REQUEST_ID_PATTERN, type SpendIntent } from "../intents.js";
-import { hardCapsFor, nativeCurrencyOf, SUPPORTED_CHAINS } from "../limits.js";
+import {
+  intentFingerprint,
+  REQUEST_ID_PATTERN,
+  type PaidFetchIntent,
+  type SpendIntent,
+} from "../intents.js";
+import {
+  hardCapsFor,
+  isNativeCurrency,
+  paidFetchHardCapsFor,
+  SUPPORTED_CHAINS,
+  wireNetworkOf,
+} from "../limits.js";
 import type { WalletState } from "../state.js";
-import type { FacilitatorPolicy, Policy } from "./schema.js";
+import type { FacilitatorPolicy, Policy, ServicePolicy } from "./schema.js";
 
 /**
  * The ledger aggregates the engine consumes. The engine OWNS this contract;
@@ -30,11 +41,17 @@ import type { FacilitatorPolicy, Policy } from "./schema.js";
  * measured back from the injected `now`, in milliseconds.
  *
  * Implementations must count every non-terminally-failed attempt (pending,
- * broadcast, ambiguous, confirmed) — anything that might have moved money
- * counts against the caps (fail closed).
+ * broadcast, ambiguous, confirmed, settled) — anything that might have
+ * moved money counts against the caps (fail closed).
+ *
+ * The two money categories NEVER mix (paid-fetch burns prepaid credit that
+ * already left the wallet at topup time): the on-chain aggregates
+ * (`spentInWindowSats`, `facilitatorSpentInWindowSats`, `totalSpentSats`,
+ * `attemptsInWindow`, `lastAttemptAt`) exclude paid-fetch requests, and the
+ * paid-fetch aggregates count nothing else.
  */
 export interface LedgerView {
-  /** Total spent in `currency` within the trailing window. */
+  /** Total spent ON-CHAIN in `currency` within the trailing window. */
   spentInWindowSats(currency: string, windowMs: number, now: Date): bigint;
   /** Total spent to one facilitator address in `currency` within the window. */
   facilitatorSpentInWindowSats(
@@ -43,14 +60,23 @@ export interface LedgerView {
     windowMs: number,
     now: Date,
   ): bigint;
-  /** Lifetime total spent in `currency` (the maxTotal aggregate). */
+  /** Lifetime total spent ON-CHAIN in `currency` (the maxTotal aggregate). */
   totalSpentSats(currency: string): bigint;
-  /** Number of spend attempts (any currency) within the trailing window. */
+  /** Number of ON-CHAIN spend attempts (any currency) within the window. */
   attemptsInWindow(windowMs: number, now: Date): number;
-  /** Timestamp of the most recent spend attempt, or null if none. */
+  /** Timestamp of the most recent ON-CHAIN spend attempt, or null if none. */
   lastAttemptAt(): Date | null;
   /** Whether an identical fingerprint was attempted within the window. */
   hasFingerprintInWindow(fingerprint: string, windowMs: number, now: Date): boolean;
+  /** Total PAID-FETCH spend in `currency` within the trailing window. */
+  paidFetchSpentInWindowSats(currency: string, windowMs: number, now: Date): bigint;
+  /** Paid-fetch spend at one service origin in `currency` within the window. */
+  serviceSpentInWindowSats(
+    origin: string,
+    currency: string,
+    windowMs: number,
+    now: Date,
+  ): bigint;
 }
 
 /** Why an otherwise-allowed intent still needs a human. */
@@ -59,7 +85,8 @@ export type ConfirmReason =
   | "facilitator-currency-mismatch"
   | "facilitator-per-tx-exceeded"
   | "facilitator-per-day-exceeded"
-  | "facilitator-not-auto-approve";
+  | "facilitator-not-auto-approve"
+  | "service-not-auto-approve";
 
 export type DenyCode =
   | "network-not-supported"
@@ -78,7 +105,17 @@ export type DenyCode =
   | "total-cap-exceeded"
   | "rate-limit-exceeded"
   | "min-interval-not-elapsed"
-  | "duplicate-intent";
+  | "duplicate-intent"
+  | "service-not-listed"
+  | "service-facilitator-unlinked"
+  | "offer-network-mismatch"
+  | "offer-currency-mismatch"
+  | "offer-domain-mismatch"
+  | "offer-facilitator-mismatch"
+  | "paid-fetch-hard-cap-per-call-exceeded"
+  | "paid-fetch-hard-cap-per-day-exceeded"
+  | "service-price-cap-exceeded"
+  | "service-daily-cap-exceeded";
 
 /**
  * The engine's verdict. Every deny carries a machine code (for the ledger,
@@ -153,8 +190,10 @@ export function evaluatePolicy(
   const pretty = `${formatAmount(amount)} ${intent.currency}`;
 
   // 3. Compiled hard caps — chain-native currency only; the file-edit-proof
-  // ceiling that binds even if policy.json was tampered with.
-  if (intent.currency === nativeCurrencyOf(policy.network)) {
+  // ceiling that binds even if policy.json was tampered with. The native
+  // check is case-insensitive so a lower/mixed-case spelling cannot slip
+  // past the compiled ceiling (isNativeCurrency).
+  if (isNativeCurrency(intent.currency, policy.network)) {
     const hard = hardCapsFor(policy.addressMode);
     if (amount > hard.maxPerTxSats) {
       return deny(
@@ -333,6 +372,209 @@ export function evaluatePolicy(
   }
   if (!facilitator.autoApprove) {
     return confirm("facilitator-not-auto-approve");
+  }
+  return { verdict: "auto" };
+}
+
+/** Case-insensitive host comparison; `domain` may or may not carry a port. */
+function domainMatchesOrigin(domain: string, origin: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  const normalized = domain.toLowerCase();
+  return normalized === url.hostname.toLowerCase() || normalized === url.host.toLowerCase();
+}
+
+/** True when both URLs parse and share an origin (scheme + host + port). */
+function sameHttpOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Evaluate one PAID-FETCH intent (an off-chain v402 payment against prepaid
+ * credit) — the parallel decision path to {@link evaluatePolicy}. Same
+ * philosophy: pure, deterministic, ordered checks, first failure wins,
+ * tiering last. The intent carries the 402 offer's claims (price, asset,
+ * network, domain, facilitator), all read BEFORE anything was signed — this
+ * function is the price gate the client library does not provide.
+ *
+ *  1. network pin              5. offer pins (currency, domain, facilitator)
+ *  2. intent shape             6. arm window
+ *  3. compiled paid-fetch      7. price cap (per call)
+ *     hard caps (native)       8. service daily budget
+ *  4. service allowlist        9. tier: autoApprove ⇒ auto, else confirm
+ *
+ * Deliberate differences from the on-chain path, recorded in RISKS.md:
+ * grants and the send rate limits do not apply (they govern WALLET funds;
+ * paid-fetch burns prepaid credit at its own high call frequency), and
+ * there is no dedupe window (repeating an identical API call is the normal
+ * case, and the requestId idempotency layer still holds).
+ */
+export function evaluatePaidFetch(
+  intent: PaidFetchIntent,
+  policy: Policy,
+  ledger: LedgerView,
+  state: WalletState,
+  now: Date,
+): Decision {
+  // 1. Network pin — same rule as the on-chain path.
+  if (!(SUPPORTED_CHAINS as readonly string[]).includes(policy.network)) {
+    return deny(
+      "network-not-supported",
+      `This build does not operate on network "${policy.network}".`,
+    );
+  }
+
+  // 2. Intent shape re-validation.
+  if (intent.amountSats <= 0n) {
+    return deny("invalid-intent", "The offered price must be greater than zero.");
+  }
+  if (!REQUEST_ID_PATTERN.test(intent.requestId)) {
+    return deny("invalid-intent", "The requestId must be 8-64 characters of [A-Za-z0-9._-].");
+  }
+  if (
+    intent.currency.length === 0 ||
+    intent.recipientAddress.length === 0 ||
+    intent.recipientName.length === 0 ||
+    !intent.path.startsWith("/") ||
+    intent.method.length === 0
+  ) {
+    return deny("invalid-intent", "The intent is missing a currency, service or request path.");
+  }
+
+  const amount = intent.amountSats;
+  const pretty = `${formatAmount(amount)} ${intent.currency}`;
+
+  // 3. Compiled paid-fetch hard caps — chain-native currency only, the
+  // file-edit-proof ceiling on burning prepaid credit (case-insensitive
+  // native check, mirroring the on-chain path).
+  if (isNativeCurrency(intent.currency, policy.network)) {
+    const hard = paidFetchHardCapsFor(policy.addressMode);
+    if (amount > hard.maxPerCallSats) {
+      return deny(
+        "paid-fetch-hard-cap-per-call-exceeded",
+        `${pretty} exceeds the compiled per-call paid-fetch hard cap of ` +
+          `${formatAmount(hard.maxPerCallSats)} ${intent.currency}.`,
+      );
+    }
+    const spentDay = ledger.paidFetchSpentInWindowSats(intent.currency, DAY_MS, now);
+    if (spentDay + amount > hard.maxPerDaySats) {
+      return deny(
+        "paid-fetch-hard-cap-per-day-exceeded",
+        `${pretty} would exceed the compiled 24h paid-fetch hard cap of ` +
+          `${formatAmount(hard.maxPerDaySats)} ${intent.currency} ` +
+          `(${formatAmount(spentDay)} already spent).`,
+      );
+    }
+  }
+
+  // 4. Service allowlist — the resolved (name, origin) pair must match an
+  // entry exactly (the gate resolved it, the engine re-checks).
+  const service: ServicePolicy | undefined = policy.services.find(
+    (entry) => entry.name === intent.recipientName && entry.origin === intent.recipientAddress,
+  );
+  if (service === undefined) {
+    return deny(
+      "service-not-listed",
+      `"${intent.recipientName}" (${intent.recipientAddress}) is not an allowlisted paid service.`,
+    );
+  }
+  const facilitator = policy.facilitators.find(
+    (entry) => entry.name === service.facilitator && entry.currency === service.currency,
+  );
+  if (facilitator === undefined || facilitator.apiUrl === undefined) {
+    // The schema forbids this; keep the runtime check honest (fail closed).
+    return deny(
+      "service-facilitator-unlinked",
+      `Service "${service.name}" has no linked facilitator with an apiUrl in the current policy.`,
+    );
+  }
+
+  // 5. Offer pins — every claim of the 402 offer that could redirect the
+  // payment is matched against operator-configured values. A mismatch is a
+  // deny, never a confirm: a human cannot verify a rogue offer either.
+  // The wire carries the LOWERCASE network id (protocol canonical form);
+  // anything else — another chain or a protocol-invalid casing — is a deny.
+  if (intent.offerNetwork !== wireNetworkOf(policy.network)) {
+    return deny(
+      "offer-network-mismatch",
+      `The 402 offer is on network "${intent.offerNetwork}", not ` +
+        `${wireNetworkOf(policy.network)} (${policy.network}).`,
+    );
+  }
+  if (intent.currency !== service.currency) {
+    return deny(
+      "offer-currency-mismatch",
+      `The 402 offer prices in ${intent.currency}, but service "${service.name}" is ` +
+        `configured for ${service.currency}.`,
+    );
+  }
+  if (!domainMatchesOrigin(intent.canonicalDomain, service.origin)) {
+    return deny(
+      "offer-domain-mismatch",
+      `The 402 offer would bind the payment to domain "${intent.canonicalDomain}", which is ` +
+        `not the allowlisted origin ${service.origin} — refusing to sign a payment that ` +
+        `could be replayed elsewhere.`,
+    );
+  }
+  if (!sameHttpOrigin(intent.offerFacilitator, facilitator.apiUrl)) {
+    return deny(
+      "offer-facilitator-mismatch",
+      `The 402 offer clears through "${intent.offerFacilitator}", but service ` +
+        `"${service.name}" is funded via "${facilitator.name}" (${facilitator.apiUrl}).`,
+    );
+  }
+
+  // 6. Arm window — the operator's global enablement switch applies to
+  // every money category.
+  if (policy.armRequired) {
+    if (state.armedUntil === null || !isFuture(state.armedUntil, now)) {
+      return deny(
+        "not-armed",
+        "The wallet is not armed. Ask the operator to run `peculium arm`.",
+      );
+    }
+  }
+
+  // 7./8. The price gate: per-call cap, then the service's trailing-24h
+  // budget. Over-budget is a DENY, not a confirm — paid-fetch is
+  // high-frequency and a per-call human escalation would train
+  // rubber-stamping; the operator widens budgets via the CLI instead.
+  if (amount > service.maxPricePerCallSats) {
+    return deny(
+      "service-price-cap-exceeded",
+      `The offered price of ${pretty} exceeds the per-call cap of ` +
+        `${formatAmount(service.maxPricePerCallSats)} ${service.currency} for service ` +
+        `"${service.name}".`,
+    );
+  }
+  const serviceSpentDay = ledger.serviceSpentInWindowSats(
+    service.origin,
+    service.currency,
+    DAY_MS,
+    now,
+  );
+  if (serviceSpentDay + amount > service.maxPerDaySats) {
+    return deny(
+      "service-daily-cap-exceeded",
+      `${pretty} would exceed the 24h budget of ${formatAmount(service.maxPerDaySats)} ` +
+        `${service.currency} for service "${service.name}" ` +
+        `(${formatAmount(serviceSpentDay)} already spent).`,
+    );
+  }
+
+  // 9. Tier — inside every limit: autoApprove runs unattended (that is the
+  // operating mode paid-fetch is built for); otherwise each call asks the
+  // human (an operator choice for expensive services).
+  if (!service.autoApprove) {
+    return confirm("service-not-auto-approve");
   }
   return { verdict: "auto" };
 }

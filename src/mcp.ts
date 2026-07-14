@@ -1,21 +1,24 @@
 /**
  * The MCP surface — the ONLY thing the LLM can touch (DESIGN.md §7).
  *
- * Ten tools, split by trust:
+ * Eleven tools, split by trust:
  *
  * - read-only, no gate: `wallet_balance`, `wallet_receive_address`,
  *   `wallet_list_recipients`, `wallet_transaction_status`;
  * - read-only dry-run: `wallet_precheck` — runs the pure engine only,
  *   NEVER reserves, never takes the gate mutex;
- * - money, full gate sequence: `wallet_topup_facilitator`, `wallet_send`.
+ * - money, full gate sequence: `wallet_topup_facilitator`, `wallet_send`
+ *   (on-chain, WalletGate) and `wallet_paid_fetch` (off-chain v402
+ *   payment against prepaid credit, PaymentGate).
  *
- * Boundary rules enforced here: the agent names a recipient, it never
- * supplies an address — resolution happens against the CURRENT policy and
- * the gate re-validates the resolved pair. Every tool output is JSON-safe
- * (bigint-free): amounts leave as 8-decimal strings via `formatAmount`.
- * Policy denials and failed spends are RESULTS, not protocol errors — the
- * agent is supposed to read and reason about them; `isError` is reserved
- * for infrastructure failures (unreadable policy, unreachable node).
+ * Boundary rules enforced here: the agent names a recipient or service, it
+ * never supplies an address or URL — resolution happens against the
+ * CURRENT policy and the gate re-validates the resolved pair. Every tool
+ * output is JSON-safe (bigint-free): amounts leave as 8-decimal strings
+ * via `formatAmount`. Policy denials and failed spends are RESULTS, not
+ * protocol errors — the agent is supposed to read and reason about them;
+ * `isError` is reserved for infrastructure failures (unreadable policy,
+ * unreachable node).
  *
  * `ElicitationConfirmer` is the production `Confirmer`: MCP form-mode
  * elicitation with an explicit {approve, deny} enum and NO default (a
@@ -25,14 +28,12 @@
  */
 
 import { V402Client } from "@chainvue/v402-client-fetch";
-import { LocalKeySigner } from "@chainvue/v402-signer-verus";
-import { NETWORK_CONFIG } from "@chainvue/verus-sdk";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { formatAmount, parseAmount } from "verus-rpc";
 import { z } from "zod";
 
-import { readKeystoreFile, unlockKeystore } from "./keystore.js";
+import { errorDetail } from "./errors.js";
 
 import type { AuditLog } from "./audit.js";
 import type { WalletBackend } from "./backend.js";
@@ -45,6 +46,9 @@ import {
   type SpendIntent,
 } from "./intents.js";
 import type { RequestSnapshot, SpendLedger } from "./ledger/ledger.js";
+import { SpendLock } from "./lock.js";
+import { buildIdentitySigner, V402PaymentBackend, type PaymentBackend } from "./payment.js";
+import { PaymentGate, type PaidFetchOutcome } from "./payment-gate.js";
 import { evaluatePolicy } from "./policy/engine.js";
 import type { LoadedPolicy, PolicySource } from "./policy/load.js";
 import type { Policy } from "./policy/schema.js";
@@ -139,6 +143,11 @@ export interface PeculiumServerDeps {
    * {@link ElicitationConfirmer} bound to the created server.
    */
   confirmer?: Confirmer;
+  /**
+   * Payment backend override for tests; production default is the
+   * {@link V402PaymentBackend} over the global fetch and the keystore.
+   */
+  paymentBackend?: PaymentBackend;
 }
 
 type ToolPayload = Record<string, unknown>;
@@ -163,10 +172,6 @@ function infraError(message: string): ToolResult {
   return { content: [{ type: "text", text: message }], isError: true };
 }
 
-function errorDetail(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** JSON-safe view of a ledger snapshot (bigint amount → decimal string). */
 function snapshotPayload(snapshot: RequestSnapshot): ToolPayload {
   return {
@@ -181,6 +186,7 @@ function snapshotPayload(snapshot: RequestSnapshot): ToolPayload {
     txid: snapshot.txid,
     confirmations: snapshot.confirmations,
     failure: snapshot.failure,
+    httpStatus: snapshot.httpStatus,
     ambiguousCause: snapshot.ambiguousCause,
     resolution: snapshot.resolution,
     countsAsSpent: snapshot.countsAsSpent,
@@ -255,17 +261,23 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
     {
       instructions:
         "Peculium moves real Verus money under an operator-configured policy you cannot " +
-        "change. Recipients are named allowlist entries (wallet_list_recipients); amounts " +
-        "are decimal strings. Use wallet_precheck to test an intent before spending. " +
-        "Denials are final — do not retry a denied intent with varied parameters. " +
-        "Orientation: wallet_financial_position is the cockpit (balances, budgets, " +
-        "in-flight, runway); wallet_spending_report answers what was spent (chartable); " +
-        "wallet_prepaid_balance reads your credit at a facilitator. On-chain balance and " +
-        "prepaid facilitator credit are different pools.",
+        "change. Recipients, facilitators and paid services are named allowlist entries " +
+        "(wallet_list_recipients); amounts are decimal strings. Use wallet_precheck to " +
+        "test an on-chain intent before spending. Denials are final — do not retry a " +
+        "denied intent with varied parameters. Orientation: wallet_financial_position is " +
+        "the cockpit (balances, budgets, in-flight, runway); wallet_spending_report " +
+        "answers what was spent (chartable); wallet_prepaid_balance reads your credit at " +
+        "a facilitator. Three money pools: ON-CHAIN wallet balance (wallet_topup_" +
+        "facilitator/wallet_send move it), PREPAID credit at facilitators (funded by " +
+        "topups), and wallet_paid_fetch BURNS that prepaid credit per API call — one " +
+        "identity, one key, one policy, one ledger for all of it.",
     },
   );
 
   const confirmer = deps.confirmer ?? new ElicitationConfirmer(server);
+  // One lock shared by both money gates: at most one on-chain spend OR paid
+  // fetch — hence at most one pending human elicitation — in flight at a time.
+  const spendLock = new SpendLock();
   const gate = new WalletGate({
     policySource,
     ledger,
@@ -274,6 +286,19 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
     audit,
     stateDir,
     clock,
+    lock: spendLock,
+  });
+  const paymentGate = new PaymentGate({
+    policySource,
+    ledger,
+    backend:
+      deps.paymentBackend ??
+      new V402PaymentBackend({ reader, stateDir, clock }),
+    confirmer,
+    audit,
+    stateDir,
+    clock,
+    lock: spendLock,
   });
 
   /** Refresh the policy (audit on change) — throws like PolicySource.refresh. */
@@ -432,14 +457,16 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
     {
       title: "Allowlisted recipients",
       description:
-        "The operator-configured allowlists — the agent's ENTIRE payment universe. Two " +
+        "The operator-configured allowlists — the agent's ENTIRE payment universe. Three " +
         "categories with different trust models: FACILITATORS are prepaid v402 banks " +
         "(wallet_topup_facilitator deposits credit there; small topups within the shown " +
         "budget auto-approve because the operator pre-authorized that budget) — " +
         "RECIPIENTS are arbitrary payout destinations (wallet_send, ALWAYS " +
-        "human-confirmed, because arbitrary sends are how money leaves for good). " +
-        "remainingToday shows what is left of each facilitator's trailing-24h budget " +
-        "right now. Only these NAMES are valid destinations. Read-only.",
+        "human-confirmed, because arbitrary sends are how money leaves for good) — " +
+        "SERVICES are v402-guarded APIs payable per call with wallet_paid_fetch, burning " +
+        "prepaid credit at the linked facilitator within the shown per-call/daily caps. " +
+        "remainingToday shows what is left of each trailing-24h budget right now. Only " +
+        "these NAMES are valid destinations. Read-only.",
       inputSchema: {},
       annotations: { readOnlyHint: true },
     },
@@ -486,6 +513,25 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
           )),
         });
       }
+      const services = policy.services.map((entry) => {
+        const spentToday = ledger.serviceSpentInWindowSats(
+          entry.origin,
+          entry.currency,
+          dayMs,
+          now,
+        );
+        const remaining = entry.maxPerDaySats - spentToday;
+        return {
+          name: entry.name,
+          origin: entry.origin,
+          facilitator: entry.facilitator,
+          currency: entry.currency,
+          maxPricePerCall: formatAmount(entry.maxPricePerCallSats),
+          maxPerDay: formatAmount(entry.maxPerDaySats),
+          remainingToday: formatAmount(remaining > 0n ? remaining : 0n),
+          autoApprove: entry.autoApprove,
+        };
+      });
       return ok({
         network: policy.network,
         currencies: policy.currencies.map((entry) => ({
@@ -496,6 +542,7 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
         })),
         facilitators,
         recipients,
+        services,
         note:
           "A currency without a cap entry is not spendable. Sends always require human " +
           "confirmation; only the operator (CLI) can add or change entries.",
@@ -591,16 +638,20 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
         'Answers "what did I spend money on?" from the wallet\'s append-only ledger: a ' +
         "LIST of recent money requests (with their requestIds — use them with " +
         "wallet_transaction_status) plus AGGREGATES bucketed by day, recipient or kind. " +
-        "Amounts counted as spent follow the same fail-closed rule as the caps " +
-        "(broadcast/confirmed/pending/ambiguous count; definite failures do not). " +
+        "Covers on-chain spends AND off-chain paid-fetch payments. Amounts counted as " +
+        "spent follow the same fail-closed rule as the caps (broadcast/confirmed/" +
+        "settled/pending/ambiguous count; definite failures do not). " +
         "Ideal source data for charts. Read-only, wallet-local.",
       inputSchema: {
         recipient: z
           .string()
           .min(1)
           .optional()
-          .describe("Filter to one allowlist name (facilitator or recipient)."),
-        kind: z.enum(["topup", "send"]).optional().describe("Filter to one request kind."),
+          .describe("Filter to one allowlist name (facilitator, recipient or paid service)."),
+        kind: z
+          .enum(["topup", "send", "paid-fetch"])
+          .optional()
+          .describe("Filter to one request kind (paid-fetch = off-chain v402 payments)."),
         sinceHours: z
           .number()
           .int()
@@ -713,6 +764,7 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
           state: s.state,
           approval: s.approval,
           txid: s.txid,
+          ...(s.httpStatus !== null ? { httpStatus: s.httpStatus } : {}),
         })),
       });
     },
@@ -724,10 +776,10 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
       title: "Financial position (cockpit)",
       description:
         "The whole money picture in one call: on-chain wallet balance, today's spend vs " +
-        "every cap, per-facilitator remaining budgets, in-flight/ambiguous requests, and a " +
-        "burn-rate → runway estimate from the trailing 7 days. PREPAID credit at " +
-        "facilitators is separate (wallet_prepaid_balance — it requires a signed query). " +
-        "Read-only.",
+        "every cap, per-facilitator remaining budgets, per-service remaining paid-fetch " +
+        "budgets, in-flight/ambiguous requests, and a burn-rate → runway estimate from " +
+        "the trailing 7 days. PREPAID credit at facilitators is separate " +
+        "(wallet_prepaid_balance — it requires a signed query). Read-only.",
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
@@ -786,11 +838,29 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
         };
       });
 
+      const services = policy.services.map((entry) => {
+        const spentToday = ledger.serviceSpentInWindowSats(
+          entry.origin,
+          entry.currency,
+          dayMs,
+          now,
+        );
+        const remaining = entry.maxPerDaySats - spentToday;
+        return {
+          name: entry.name,
+          currency: entry.currency,
+          spentToday: formatAmount(spentToday),
+          remainingToday: formatAmount(remaining > 0n ? remaining : 0n),
+          autoApprove: entry.autoApprove,
+        };
+      });
+
       const inFlight = ledger
         .allSnapshots()
         .filter((s) => s.state === "pending" || s.state === "broadcast" || s.state === "ambiguous")
         .map((s) => ({
           requestId: s.requestId,
+          kind: s.kind,
           state: s.state,
           amount: formatAmount(s.amountSats),
           currency: s.currency,
@@ -816,6 +886,7 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
         ...(balanceNote !== null ? { balanceNote } : {}),
         caps,
         facilitators,
+        services,
         inFlight,
         burn: {
           window: "7d",
@@ -904,21 +975,12 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
         });
       }
       try {
-        const keystore = readKeystoreFile(stateDir);
-        const wif = unlockKeystore(keystore, passphrase);
-        const systemId =
-          policy.network === "VRSCTEST"
-            ? NETWORK_CONFIG.testnet.chainId
-            : NETWORK_CONFIG.mainnet.chainId;
-        const signer = new LocalKeySigner(wif, {
-          identity: { identityAddress: policy.agentAddress, systemId },
-          heightProvider: async () => {
-            const height = await reader.getBlockHeight();
-            if (height === null) {
-              throw new Error("chain height unavailable for the identity signature");
-            }
-            return height;
-          },
+        const signer = buildIdentitySigner({
+          reader,
+          stateDir,
+          agentAddress: policy.agentAddress,
+          network: policy.network,
+          passphrase,
         });
         const client = new V402Client({
           identity: payer,
@@ -1041,6 +1103,144 @@ export function buildMcpServer(deps: PeculiumServerDeps): McpServer {
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
     },
     async (input): Promise<ToolResult> => executeMoney("send", input),
+  );
+
+  /** JSON-safe view of a payment-gate outcome. */
+  function paidFetchPayload(outcome: PaidFetchOutcome): ToolPayload {
+    switch (outcome.status) {
+      case "settled":
+        return {
+          status: "settled",
+          requestId: outcome.requestId,
+          service: outcome.service,
+          amountPaid: formatAmount(outcome.amountSats),
+          currency: outcome.currency,
+          httpStatus: outcome.response.httpStatus,
+          contentType: outcome.response.contentType,
+          body: outcome.response.body,
+          bodyEncoding: outcome.response.bodyEncoding,
+          ...(outcome.response.truncated ? { truncated: true } : {}),
+          ...(outcome.response.httpStatus >= 200 && outcome.response.httpStatus < 300
+            ? {}
+            : {
+                note:
+                  "The payment was sent but the endpoint answered non-2xx; the amount " +
+                  "counts as spent (fail closed — the facilitator may have rolled it " +
+                  "back, which wallet_prepaid_balance would show).",
+              }),
+        };
+      case "no-payment-required":
+        return {
+          status: "no-payment-required",
+          requestId: outcome.requestId,
+          service: outcome.service,
+          httpStatus: outcome.response.httpStatus,
+          contentType: outcome.response.contentType,
+          body: outcome.response.body,
+          bodyEncoding: outcome.response.bodyEncoding,
+          ...(outcome.response.truncated ? { truncated: true } : {}),
+          note: "The endpoint answered without demanding payment — nothing was paid or recorded.",
+        };
+      case "denied":
+        return {
+          status: "denied",
+          requestId: outcome.requestId,
+          reasonCode: outcome.reasonCode,
+          reason: outcome.humanText,
+        };
+      case "failed":
+        return {
+          status: "failed",
+          requestId: outcome.requestId,
+          stage: outcome.stage,
+          reason: outcome.humanText,
+        };
+      case "ambiguous":
+        return {
+          status: "ambiguous",
+          requestId: outcome.requestId,
+          reason: outcome.humanText,
+        };
+      case "replayed":
+        return {
+          status: "replayed",
+          requestId: outcome.requestId,
+          note:
+            "This requestId was already processed; this is the recorded outcome, no new " +
+            "payment happened. Response bodies are not stored — use a fresh requestId to " +
+            "call the service again.",
+          priorOutcome: snapshotPayload(outcome.snapshot),
+        };
+    }
+  }
+
+  server.registerTool(
+    "wallet_paid_fetch",
+    {
+      title: "Pay a v402 API call from prepaid credit",
+      description:
+        "Call an ALLOWLISTED paid service (by name) and pay its v402 price per request " +
+        "from the PREPAID credit at the service's linked facilitator — an OFF-CHAIN " +
+        "signature, not a blockchain transaction. The wallet preflights the endpoint, " +
+        "reads the 402 price offer, and only pays if the price is within the service's " +
+        "per-call cap AND its remaining daily budget (wallet_list_recipients shows both); " +
+        "within budget it runs unattended. Over-budget offers are DENIED, never paid. " +
+        "The response body is returned along with the amount paid. If prepaid credit is " +
+        "insufficient, top up first (wallet_prepaid_balance shows credit, " +
+        "wallet_topup_facilitator funds it). Denials are final for the same parameters; " +
+        "a 'failed' outcome paid nothing and may be retried with a FRESH requestId.",
+      inputSchema: {
+        requestId: requestIdSchema.describe(
+          "Caller-chosen idempotency key (8-64 chars of [A-Za-z0-9._-]). A known " +
+            "requestId never pays twice; it replays the recorded outcome WITHOUT the " +
+            "response body — use a fresh id per distinct call.",
+        ),
+        service: z
+          .string()
+          .min(1)
+          .describe(
+            "Allowlist NAME of the paid service (see wallet_list_recipients) — never a URL.",
+          ),
+        path: z
+          .string()
+          .max(2048)
+          .regex(/^\/[\x21-\x7e]*$/, "must start with '/' and contain printable ASCII only")
+          .optional()
+          .describe('Request path + query on the service, e.g. "/v1/search?q=verus". Default "/".'),
+        method: z
+          .enum(["GET", "POST", "PUT", "PATCH", "DELETE"])
+          .optional()
+          .describe('HTTP method (default "GET").'),
+        body: z
+          .string()
+          .max(1024 * 1024)
+          .optional()
+          .describe("Request body for POST/PUT/PATCH (its hash is bound into the payment)."),
+        maxPrice: amountStringSchema
+          .optional()
+          .describe(
+            "Optional own price ceiling for THIS call (decimal string). The offer is " +
+              "denied if it asks more — tighter than, never instead of, the operator's caps.",
+          ),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async ({ requestId, service, path, method, body, maxPrice }): Promise<ToolResult> => {
+      // All preconditions — replay, policy load, arm window, identity mode,
+      // keystore readiness — live INSIDE the gate so replay (which needs no
+      // key) always wins: a locked keystore never hides an already-recorded
+      // outcome (the idempotency contract), and no check runs before the
+      // network preflight that the gate does not also enforce.
+      const outcome = await paymentGate.execute({
+        requestId,
+        service,
+        path: path ?? "/",
+        method: method ?? "GET",
+        ...(body !== undefined ? { body } : {}),
+        ...(maxPrice !== undefined ? { maxPriceSats: parseAmount(maxPrice) } : {}),
+      });
+      return ok(paidFetchPayload(outcome));
+    },
   );
 
   return server;

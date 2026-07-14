@@ -30,10 +30,12 @@ export {
 } from "./backend.js";
 export {
   renderConfirmMessage,
+  renderPaidFetchConfirmMessage,
   StaticConfirmer,
   type ConfirmContext,
   type Confirmer,
   type ConfirmOutcome,
+  type PaidFetchConfirmContext,
 } from "./confirm.js";
 export {
   PeculiumError,
@@ -70,6 +72,7 @@ export {
   parseLedgerLine,
   pendingRecordSchema,
   resolvedRecordSchema,
+  settledRecordSchema,
   type AmbiguousCause,
   type AmbiguousRecord,
   type BroadcastRecord,
@@ -79,9 +82,11 @@ export {
   type FailureStage,
   type LedgerRecord,
   type PendingRecord,
+  type RequestKind,
   type ResolvedBy,
   type ResolvedOutcome,
   type ResolvedRecord,
+  type SettledRecord,
   type SpendApproval,
 } from "./ledger/records.js";
 export {
@@ -98,6 +103,8 @@ export {
   rawSpendInputSchema,
   REQUEST_ID_PATTERN,
   requestIdSchema,
+  type MoneyIntent,
+  type PaidFetchIntent,
   type RawSpendInput,
   type SendIntent,
   type SpendIntent,
@@ -107,19 +114,45 @@ export {
   HARD_CAPS,
   hardCapsFor,
   nativeCurrencyOf,
+  PAID_FETCH_HARD_CAPS,
+  paidFetchHardCapsFor,
   STARTER_HARD_CAPS,
+  STARTER_PAID_FETCH_HARD_CAPS,
   SUPPORTED_CHAINS,
   type AddressMode,
   type HardCaps,
+  type PaidFetchHardCaps,
   type SupportedChain,
 } from "./limits.js";
 export {
+  evaluatePaidFetch,
   evaluatePolicy,
   type ConfirmReason,
   type Decision,
   type DenyCode,
   type LedgerView,
 } from "./policy/engine.js";
+export {
+  MockPaymentBackend,
+  parse402Offer,
+  PaymentRejectedError,
+  PaymentSetupError,
+  PaymentUncertainError,
+  V402PaymentBackend,
+  type PaidRequest,
+  type PaidResponse,
+  type PaymentBackend,
+  type PaymentOffer,
+  type PreflightResult,
+  type V402PaymentBackendDeps,
+} from "./payment.js";
+export {
+  PaymentGate,
+  type PaidFetchOutcome,
+  type PaidFetchRequest,
+  type PaymentGateDenyCode,
+  type PaymentGateDeps,
+} from "./payment-gate.js";
 export {
   buildMcpServer,
   ElicitationConfirmer,
@@ -148,6 +181,7 @@ export {
   type PolicyFileInput,
   type RatePolicy,
   type RecipientPolicy,
+  type ServicePolicy,
 } from "./policy/schema.js";
 export {
   INITIAL_STATE,

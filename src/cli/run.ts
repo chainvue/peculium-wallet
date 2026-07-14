@@ -47,8 +47,12 @@ usage: peculium <command> [options]
   arm [minutes] / disarm                      time-boxed enablement window
   allow recipient <name> <address>            allowlist a send recipient
   allow facilitator <name> <address> --max-per-tx X --max-per-day Y
-        [--currency C] [--auto-approve]       allowlist a topup facilitator
-  revoke <recipient|facilitator> <name>       remove allowlist entries
+        [--currency C] [--auto-approve] [--api-url <url>]
+                                              allowlist a topup facilitator
+  allow service <name> --origin <url> --facilitator <name>
+        --max-per-call X --max-per-day Y [--currency C] [--auto-approve]
+                                              allowlist a v402 paid service
+  revoke <recipient|facilitator|service> <name>   remove allowlist entries
   set cap <currency> --per-tx X --per-day Y --total Z
   set rate [--max-per-hour N] [--min-interval S] [--dedupe-window S]
   set confirm-timeout <seconds>

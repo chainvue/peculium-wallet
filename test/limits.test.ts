@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   HARD_CAPS,
   hardCapsFor,
+  isNativeCurrency,
   nativeCurrencyOf,
   STARTER_HARD_CAPS,
   SUPPORTED_CHAINS,
+  systemIdOf,
+  wireNetworkOf,
 } from "../src/limits.js";
 
 describe("limits", () => {
@@ -37,5 +40,20 @@ describe("limits", () => {
 
   it("the chain-native currency shares the chain name", () => {
     expect(nativeCurrencyOf("VRSCTEST")).toBe("VRSCTEST");
+  });
+
+  it("the native-currency check is case-insensitive (compiled caps cannot be cased around)", () => {
+    expect(isNativeCurrency("VRSCTEST", "VRSCTEST")).toBe(true);
+    expect(isNativeCurrency("vrsctest", "VRSCTEST")).toBe(true);
+    expect(isNativeCurrency("VrScTeSt", "VRSCTEST")).toBe(true);
+    expect(isNativeCurrency("TOKEN", "VRSCTEST")).toBe(false);
+  });
+
+  it("the v402 wire network id is lowercase (protocol canonical form)", () => {
+    expect(wireNetworkOf("VRSCTEST")).toBe("vrsctest");
+  });
+
+  it("systemIdOf returns the testnet chain id", () => {
+    expect(systemIdOf("VRSCTEST")).toMatch(/^i[0-9A-Za-z]+$/);
   });
 });

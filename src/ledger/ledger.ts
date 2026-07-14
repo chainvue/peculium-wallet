@@ -24,7 +24,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { PeculiumError } from "../errors.js";
-import { intentFingerprint, type SpendIntent } from "../intents.js";
+import { intentFingerprint, type MoneyIntent } from "../intents.js";
 import type { LedgerView } from "../policy/engine.js";
 import {
   ledgerRecordSchema,
@@ -36,6 +36,7 @@ import {
   type FailureStage,
   type LedgerRecord,
   type PendingRecord,
+  type RequestKind,
   type ResolvedBy,
   type ResolvedOutcome,
   type SpendApproval,
@@ -85,6 +86,7 @@ export type RequestState =
   | "broadcast"
   | "confirmed"
   | "failed"
+  | "settled"
   | "ambiguous"
   | "resolved";
 
@@ -95,7 +97,7 @@ export type RequestState =
  */
 export interface RequestSnapshot {
   requestId: string;
-  kind: "topup" | "send";
+  kind: RequestKind;
   recipientAddress: string;
   recipientName: string;
   currency: string;
@@ -111,6 +113,8 @@ export interface RequestSnapshot {
   confirmations: number | null;
   /** Failure detail when state is "failed". */
   failure: { stage: FailureStage; error: FailureDetail } | null;
+  /** The HTTP status a paid-fetch settled with, or null (state "settled"). */
+  httpStatus: number | null;
   /** Why the request became ambiguous (kept after resolution, for audit). */
   ambiguousCause: AmbiguousCause | null;
   /** How the ambiguity was closed, when state is "resolved". */
@@ -129,6 +133,7 @@ interface RequestTrack {
   confirmations: number | null;
   txid: string | null;
   failure: { stage: FailureStage; error: FailureDetail } | null;
+  httpStatus: number | null;
   ambiguousCause: AmbiguousCause | null;
   resolution: { outcome: ResolvedOutcome; txid: string | null; by: ResolvedBy } | null;
 }
@@ -253,9 +258,11 @@ export class SpendLedger implements LedgerView {
   /**
    * Reserve a spend: the row that makes the request count against every
    * cap from this instant on, written and fsynced BEFORE any signing or
-   * broadcasting. A duplicate requestId throws `LedgerStateError`.
+   * broadcasting. A duplicate requestId throws `LedgerStateError`. For
+   * "paid-fetch" intents the pair (recipientName, recipientAddress) is
+   * (service name, service origin) and the amount is the vetted offer price.
    */
-  recordPending(intent: SpendIntent, approval: SpendApproval, policyHash: string): PendingRecord {
+  recordPending(intent: MoneyIntent, approval: SpendApproval, policyHash: string): PendingRecord {
     return this.append({
       v: 1,
       type: "pending",
@@ -314,6 +321,21 @@ export class SpendLedger implements LedgerView {
       requestId,
       stage,
       error,
+      at: this.clock().toISOString(),
+    });
+  }
+
+  /**
+   * A paid-fetch got a definitive HTTP answer after its payment headers
+   * were sent (terminal; keeps counting as spent — see records.ts). Legal
+   * only from `pending` and only for "paid-fetch" requests.
+   */
+  recordSettled(requestId: string, httpStatus: number): LedgerRecord {
+    return this.append({
+      v: 1,
+      type: "settled",
+      requestId,
+      httpStatus,
       at: this.clock().toISOString(),
     });
   }
@@ -415,11 +437,17 @@ export class SpendLedger implements LedgerView {
   }
 
   // ------------------------------------------------------- LedgerView contract
+  //
+  // The on-chain aggregates exclude "paid-fetch" rows and the paid-fetch
+  // aggregates count nothing else (the engine's LedgerView contract):
+  // prepaid credit already left the wallet at topup time, so counting a
+  // paid-fetch against the wallet-fund caps would double-count it.
 
   spentInWindowSats(currency: string, windowMs: number, now: Date): bigint {
     let total = 0n;
     for (const track of this.tracks.values()) {
       if (
+        track.pending.kind !== "paid-fetch" &&
         track.pending.currency === currency &&
         countsAsSpent(track) &&
         inWindow(track.pendingAtMs, windowMs, now)
@@ -439,6 +467,7 @@ export class SpendLedger implements LedgerView {
     let total = 0n;
     for (const track of this.tracks.values()) {
       if (
+        track.pending.kind !== "paid-fetch" &&
         track.pending.recipientAddress === address &&
         track.pending.currency === currency &&
         countsAsSpent(track) &&
@@ -453,7 +482,11 @@ export class SpendLedger implements LedgerView {
   totalSpentSats(currency: string): bigint {
     let total = 0n;
     for (const track of this.tracks.values()) {
-      if (track.pending.currency === currency && countsAsSpent(track)) {
+      if (
+        track.pending.kind !== "paid-fetch" &&
+        track.pending.currency === currency &&
+        countsAsSpent(track)
+      ) {
         total += track.amountSats;
       }
     }
@@ -463,7 +496,7 @@ export class SpendLedger implements LedgerView {
   attemptsInWindow(windowMs: number, now: Date): number {
     let count = 0;
     for (const track of this.tracks.values()) {
-      if (inWindow(track.pendingAtMs, windowMs, now)) {
+      if (track.pending.kind !== "paid-fetch" && inWindow(track.pendingAtMs, windowMs, now)) {
         count += 1;
       }
     }
@@ -473,11 +506,50 @@ export class SpendLedger implements LedgerView {
   lastAttemptAt(): Date | null {
     let lastMs: number | null = null;
     for (const track of this.tracks.values()) {
+      if (track.pending.kind === "paid-fetch") {
+        continue;
+      }
       if (lastMs === null || track.pendingAtMs > lastMs) {
         lastMs = track.pendingAtMs;
       }
     }
     return lastMs === null ? null : new Date(lastMs);
+  }
+
+  paidFetchSpentInWindowSats(currency: string, windowMs: number, now: Date): bigint {
+    let total = 0n;
+    for (const track of this.tracks.values()) {
+      if (
+        track.pending.kind === "paid-fetch" &&
+        track.pending.currency === currency &&
+        countsAsSpent(track) &&
+        inWindow(track.pendingAtMs, windowMs, now)
+      ) {
+        total += track.amountSats;
+      }
+    }
+    return total;
+  }
+
+  serviceSpentInWindowSats(
+    origin: string,
+    currency: string,
+    windowMs: number,
+    now: Date,
+  ): bigint {
+    let total = 0n;
+    for (const track of this.tracks.values()) {
+      if (
+        track.pending.kind === "paid-fetch" &&
+        track.pending.recipientAddress === origin &&
+        track.pending.currency === currency &&
+        countsAsSpent(track) &&
+        inWindow(track.pendingAtMs, windowMs, now)
+      ) {
+        total += track.amountSats;
+      }
+    }
+    return total;
   }
 
   hasFingerprintInWindow(fingerprint: string, windowMs: number, now: Date): boolean {
@@ -581,9 +653,12 @@ export class SpendLedger implements LedgerView {
   }
 
   /**
-   * The state machine: pending → broadcast | failed | ambiguous;
-   * broadcast → confirmed | ambiguous; ambiguous → resolved; confirmed may
-   * repeat with a strictly higher count; failed and resolved are terminal.
+   * The state machine, per kind. On-chain (topup/send): pending →
+   * broadcast | failed | ambiguous; broadcast → confirmed | ambiguous;
+   * confirmed may repeat with a strictly higher count. Off-chain
+   * (paid-fetch): pending → settled | failed | ambiguous — there is no
+   * broadcast/confirmation, a signature settles or it does not. Shared:
+   * ambiguous → resolved; failed, settled and resolved are terminal.
    * Returns a human-readable problem, or null when the record is legal.
    */
   private transitionProblem(record: LedgerRecord): string | null {
@@ -599,6 +674,14 @@ export class SpendLedger implements LedgerView {
     const illegal = `illegal transition ${track.state} -> ${record.type} for requestId "${record.requestId}"`;
     switch (record.type) {
       case "broadcast":
+        if (track.pending.kind === "paid-fetch") {
+          return `"broadcast" row for off-chain paid-fetch requestId "${record.requestId}"`;
+        }
+        return track.state === "pending" ? null : illegal;
+      case "settled":
+        if (track.pending.kind !== "paid-fetch") {
+          return `"settled" row for on-chain ${track.pending.kind} requestId "${record.requestId}"`;
+        }
         return track.state === "pending" ? null : illegal;
       case "confirmed": {
         if (track.state !== "broadcast" && track.state !== "confirmed") {
@@ -612,12 +695,55 @@ export class SpendLedger implements LedgerView {
         }
         return null;
       }
-      case "failed":
-        return track.state === "pending" ? null : illegal;
-      case "ambiguous":
-        return track.state === "pending" || track.state === "broadcast" ? null : illegal;
-      case "resolved":
-        return track.state === "ambiguous" ? null : illegal;
+      case "failed": {
+        if (track.state !== "pending") {
+          return illegal;
+        }
+        // "build" (never-sent) is shared; the other stages are kind-exclusive:
+        // "broadcast-rejected" is on-chain only, "payment-rejected" (a second
+        // 402) is paid-fetch only. A cross-kind stage is corruption.
+        const isPaidFetch = track.pending.kind === "paid-fetch";
+        if (
+          (record.stage === "broadcast-rejected" && isPaidFetch) ||
+          (record.stage === "payment-rejected" && !isPaidFetch)
+        ) {
+          return `"failed" stage "${record.stage}" is not valid for ${track.pending.kind} requestId "${record.requestId}"`;
+        }
+        return null;
+      }
+      case "ambiguous": {
+        if (track.state !== "pending" && track.state !== "broadcast") {
+          return illegal;
+        }
+        // Same per-kind rule for the ambiguity cause (crash-recovery is
+        // shared): on-chain rows go ambiguous on a broadcast transport error,
+        // paid-fetch rows on a payment transport error.
+        if (
+          (track.pending.kind === "paid-fetch" && record.cause === "broadcast-transport-error") ||
+          (track.pending.kind !== "paid-fetch" && record.cause === "payment-transport-error")
+        ) {
+          return `"ambiguous" cause "${record.cause}" is not valid for ${track.pending.kind} requestId "${record.requestId}"`;
+        }
+        return null;
+      }
+      case "resolved": {
+        if (track.state !== "ambiguous") {
+          return illegal;
+        }
+        // Resolving as SPENT requires the on-chain evidence (a txid) for
+        // on-chain rows, and forbids a txid for off-chain paid-fetch rows —
+        // the invariant the CLI relies on, owned here so every caller obeys it.
+        if (record.outcome === "spent") {
+          const isPaidFetch = track.pending.kind === "paid-fetch";
+          if (isPaidFetch && record.txid !== null) {
+            return `off-chain paid-fetch requestId "${record.requestId}" cannot resolve spent with a txid`;
+          }
+          if (!isPaidFetch && record.txid === null) {
+            return `on-chain ${track.pending.kind} requestId "${record.requestId}" must resolve spent with a txid`;
+          }
+        }
+        return null;
+      }
     }
   }
 
@@ -633,6 +759,7 @@ export class SpendLedger implements LedgerView {
         confirmations: null,
         txid: null,
         failure: null,
+        httpStatus: null,
         ambiguousCause: null,
         resolution: null,
       });
@@ -656,6 +783,10 @@ export class SpendLedger implements LedgerView {
       case "failed":
         track.state = "failed";
         track.failure = { stage: record.stage, error: record.error };
+        break;
+      case "settled":
+        track.state = "settled";
+        track.httpStatus = record.httpStatus;
         break;
       case "ambiguous":
         track.state = "ambiguous";
@@ -686,6 +817,7 @@ export class SpendLedger implements LedgerView {
       txid: track.txid,
       confirmations: track.confirmations,
       failure: track.failure === null ? null : { ...track.failure },
+      httpStatus: track.httpStatus,
       ambiguousCause: track.ambiguousCause,
       resolution: track.resolution === null ? null : { ...track.resolution },
       countsAsSpent: countsAsSpent(track),
@@ -697,7 +829,7 @@ export class SpendLedger implements LedgerView {
  * The fail-closed counting rule (RISKS.md): a request counts as spent
  * unless its terminal record proves the money did NOT move — `failed`, or
  * `resolved` with outcome `not-spent`. Pending, broadcast, ambiguous,
- * confirmed and resolved(spent) all count.
+ * confirmed, settled and resolved(spent) all count.
  */
 function countsAsSpent(track: RequestTrack): boolean {
   if (track.state === "failed") {

@@ -47,16 +47,23 @@ export function cmdStatus(_argv: readonly string[], ctx: CliContext): number {
   ctx.out(``);
   ctx.out(`caps (per currency) and trailing-24h usage:`);
   for (const entry of policy.currencies) {
+    // Paid-fetch burns PREPAID credit, not wallet funds — it is excluded from
+    // the on-chain aggregates in the engine, so exclude it here too (else the
+    // CLI would show cap usage the engine never counts).
     const spentDay = snapshot.rows
       .filter(
         (row) =>
+          row.kind !== "paid-fetch" &&
           row.currency === entry.currency &&
           row.countsAsSpent &&
           now.getTime() - new Date(row.pendingAt).getTime() <= DAY_MS,
       )
       .reduce((sum, row) => sum + row.amountSats, 0n);
     const total = snapshot.rows
-      .filter((row) => row.currency === entry.currency && row.countsAsSpent)
+      .filter(
+        (row) =>
+          row.kind !== "paid-fetch" && row.currency === entry.currency && row.countsAsSpent,
+      )
       .reduce((sum, row) => sum + row.amountSats, 0n);
     ctx.out(
       `  ${entry.currency}: tx ≤ ${formatAmount(entry.maxPerTxSats)}, ` +
@@ -77,6 +84,30 @@ export function cmdStatus(_argv: readonly string[], ctx: CliContext): number {
   ctx.out(`recipients (${policy.recipients.length}):`);
   for (const entry of policy.recipients) {
     ctx.out(`  ${entry.name} → ${entry.address}`);
+  }
+  if (policy.services.length > 0) {
+    ctx.out(`paid services (${policy.services.length}) — paid-fetch burns prepaid credit:`);
+    for (const entry of policy.services) {
+      // Join on the ORIGIN (recipientAddress), exactly as the engine's
+      // serviceSpentInWindowSats does — a renamed service keeps its origin,
+      // so name-based matching would disagree with the money decision.
+      const spentDay = snapshot.rows
+        .filter(
+          (row) =>
+            row.kind === "paid-fetch" &&
+            row.recipientAddress === entry.origin &&
+            row.currency === entry.currency &&
+            row.countsAsSpent &&
+            now.getTime() - new Date(row.pendingAt).getTime() <= DAY_MS,
+        )
+        .reduce((sum, row) => sum + row.amountSats, 0n);
+      ctx.out(
+        `  ${entry.name} → ${entry.origin} [${entry.currency}] via ${entry.facilitator}, ` +
+          `call ≤ ${formatAmount(entry.maxPricePerCallSats)}, ` +
+          `24h ${formatAmount(spentDay)}/${formatAmount(entry.maxPerDaySats)}` +
+          `${entry.autoApprove ? ", auto-approve" : ""}`,
+      );
+    }
   }
 
   const ambiguous = snapshot.rows.filter((row) => row.state === "ambiguous");
@@ -110,7 +141,7 @@ export function cmdHistory(argv: readonly string[], ctx: CliContext): number {
   ctx.out(`last ${rows.length} money request(s):`);
   for (const row of rows) {
     ctx.out(
-      `  ${row.pendingAt}  ${row.kind.padEnd(5)} ${formatAmount(row.amountSats)} ` +
+      `  ${row.pendingAt}  ${row.kind.padEnd(10)} ${formatAmount(row.amountSats)} ` +
         `${row.currency} → ${row.recipientName}  [${row.state}]` +
         `${row.txid !== null ? `  ${row.txid.slice(0, 12)}…` : ""}`,
     );
@@ -160,6 +191,12 @@ export async function cmdDoctor(_argv: readonly string[], ctx: CliContext): Prom
     const loaded = loadPolicy(ctx.dir);
     agentAddress = loaded.policy.agentAddress;
     ok(`policy.json valid (hash ${loaded.policyHash.slice(0, 16)}…, network ${loaded.policy.network})`);
+    if (loaded.policy.services.length > 0 && !agentAddress.startsWith("i")) {
+      warn(
+        `${loaded.policy.services.length} paid service(s) allowlisted but the wallet is in ` +
+          `starter (R-address) mode — wallet_paid_fetch needs identity mode to sign payments`,
+      );
+    }
   } catch (error) {
     fail(`policy.json: ${error instanceof Error ? error.message : String(error)}`);
   }

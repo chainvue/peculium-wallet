@@ -62,7 +62,10 @@ export const pendingRecordSchema = z.strictObject({
   type: z.literal("pending"),
   requestId: requestIdSchema,
   fingerprint: sha256HexSchema,
-  kind: z.enum(["topup", "send"]),
+  // "paid-fetch" rows are OFF-CHAIN v402 payments: recipientName is the
+  // allowlist service name, recipientAddress its origin, the amount the
+  // vetted 402 offer price. They settle via `settled`, never `broadcast`.
+  kind: z.enum(["topup", "send", "paid-fetch"]),
   recipientAddress: z.string().min(1),
   recipientName: z.string().min(1),
   currency: z.string().min(1),
@@ -103,16 +106,18 @@ export const confirmedRecordSchema = z.strictObject({
 });
 
 /**
- * A DEFINITIVE non-spend: the tx never left the process ("build") or the
- * node rejected it outright ("broadcast-rejected"). Only these certainties
- * may be `failed`; a transport error after the bytes were sent is
- * `ambiguous`, never `failed` (fail closed).
+ * A DEFINITIVE non-spend: the tx never left the process ("build"), the
+ * node rejected it outright ("broadcast-rejected"), or — paid-fetch only —
+ * the paid attempt was answered with another 402 ("payment-rejected"; the
+ * v402 spec's price-mismatch answer, which normatively reserves nothing).
+ * Only these certainties may be `failed`; a transport error after the
+ * bytes were sent is `ambiguous`, never `failed` (fail closed).
  */
 export const failedRecordSchema = z.strictObject({
   v: z.literal(1),
   type: z.literal("failed"),
   requestId: requestIdSchema,
-  stage: z.enum(["build", "broadcast-rejected"]),
+  stage: z.enum(["build", "broadcast-rejected", "payment-rejected"]),
   error: z.strictObject({
     code: z.number().int().optional(),
     message: z.string().min(1),
@@ -121,15 +126,32 @@ export const failedRecordSchema = z.strictObject({
 });
 
 /**
+ * A paid-fetch request got a DEFINITIVE HTTP answer after the payment
+ * headers were sent. Terminal. Counts as spent regardless of the status —
+ * fail closed: the facilitator may have debited; the wallet does not trust
+ * a remote rollback claim. (The one provable no-pay answer, a second 402,
+ * is recorded as `failed(payment-rejected)` instead.)
+ */
+export const settledRecordSchema = z.strictObject({
+  v: z.literal(1),
+  type: z.literal("settled"),
+  requestId: requestIdSchema,
+  httpStatus: z.number().int().min(100).max(599),
+  at: isoDateTimeSchema,
+});
+
+/**
  * We cannot know whether money moved: the broadcast transport failed after
- * the request may have left the machine, or the process crashed between
- * `pending` and `broadcast`. Counts as spent until `resolved`.
+ * the request may have left the machine, the paid-fetch payment got no
+ * HTTP answer after its signed headers were sent, or the process crashed
+ * between `pending` and the settling record. Counts as spent until
+ * `resolved`.
  */
 export const ambiguousRecordSchema = z.strictObject({
   v: z.literal(1),
   type: z.literal("ambiguous"),
   requestId: requestIdSchema,
-  cause: z.enum(["broadcast-transport-error", "crash-recovery"]),
+  cause: z.enum(["broadcast-transport-error", "payment-transport-error", "crash-recovery"]),
   at: isoDateTimeSchema,
 });
 
@@ -152,6 +174,7 @@ export const ledgerRecordSchema = z.discriminatedUnion("type", [
   broadcastRecordSchema,
   confirmedRecordSchema,
   failedRecordSchema,
+  settledRecordSchema,
   ambiguousRecordSchema,
   resolvedRecordSchema,
 ]);
@@ -160,10 +183,13 @@ export type PendingRecord = z.infer<typeof pendingRecordSchema>;
 export type BroadcastRecord = z.infer<typeof broadcastRecordSchema>;
 export type ConfirmedRecord = z.infer<typeof confirmedRecordSchema>;
 export type FailedRecord = z.infer<typeof failedRecordSchema>;
+export type SettledRecord = z.infer<typeof settledRecordSchema>;
 export type AmbiguousRecord = z.infer<typeof ambiguousRecordSchema>;
 export type ResolvedRecord = z.infer<typeof resolvedRecordSchema>;
 export type LedgerRecord = z.infer<typeof ledgerRecordSchema>;
 
+/** The money categories a request can belong to. */
+export type RequestKind = PendingRecord["kind"];
 /** How a pending spend was approved (policy tier, engine.ts). */
 export type SpendApproval = PendingRecord["approval"];
 /** Where a definitive failure happened. */

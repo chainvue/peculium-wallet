@@ -14,18 +14,25 @@ code, not in configuration. Do not point it at funds you care about.
 
 **The LLM is untrusted input.** Every design decision follows from that:
 
-- The agent gets **ten narrow tools** (balance, receive address, list
+- The agent gets **eleven narrow tools** (balance, receive address, list
   recipients, prepaid balance, spending report, financial position,
-  precheck, topup, send, transaction status). There is no tool that changes
-  policy, adds a recipient, raises a cap, or touches a key — those are
-  CLI-only, human-only.
+  precheck, topup, send, paid fetch, transaction status). There is no tool
+  that changes policy, adds a recipient, raises a cap, or touches a key —
+  those are CLI-only, human-only.
 - **Recipients are names, never addresses.** The agent names an allowlist
   entry; the wallet resolves and re-validates it against the current
-  policy. Prompt-injected addresses have nowhere to go.
+  policy. Prompt-injected addresses have nowhere to go. The same holds for
+  paid APIs: the agent names an allowlisted **service**, never a URL.
 - **Sends always require human confirmation** (MCP elicitation, Claude
   Code >= 2.1.76). Topups may auto-approve only inside a facilitator's own
   budget. Hosts without elicitation **fail closed** — deny, never
   auto-approve.
+- **Paid API calls are price-capped by the wallet itself.** `wallet_paid_fetch`
+  preflights the endpoint unpaid, reads the v402 price offer, and only signs
+  a payment if the price is within the service's per-call cap AND its
+  remaining daily budget — over-budget offers are denied, never paid. Offer
+  claims that could redirect the payment (network, currency, domain,
+  facilitator) are pinned to operator-configured values.
 - **Caps are enforced twice**: per-currency policy caps (per-tx,
   trailing-24h, lifetime — a currency without a cap entry is unspendable),
   and compiled-in hard caps that a hand-edited `policy.json` cannot widen.
@@ -82,14 +89,16 @@ remaining budget. `peculium history` shows everything it tried.
 | `wallet_transaction_status` | read-only + confirmation refresh |
 | `wallet_topup_facilitator` | full gate; may auto-approve within the facilitator budget |
 | `wallet_send` | full gate; always human-confirmed |
+| `wallet_paid_fetch` | payment gate; pays a v402 API call from prepaid credit, price-capped per call and per day |
 
 ## CLI (the human's controls)
 
 `init` · `status` · `history` · `doctor` · `grant` (session budget) ·
-`arm`/`disarm` · `allow`/`revoke` (recipients & facilitators) · `set`
-(caps, rate, timeouts) · `resolve` (settle ambiguous broadcasts, repair a
-torn ledger tail) · `identity create` (daemon-free VerusID registration) ·
-`export-key` · `backup`/`restore` (one encrypted archive).
+`arm`/`disarm` · `allow`/`revoke` (recipients, facilitators & paid
+services) · `set` (caps, rate, timeouts) · `resolve` (settle ambiguous
+broadcasts and payments, repair a torn ledger tail) · `identity create`
+(daemon-free VerusID registration) · `export-key` · `backup`/`restore`
+(one encrypted archive).
 
 Run `peculium help` for the full syntax.
 

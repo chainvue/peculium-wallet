@@ -12,6 +12,7 @@
  * unspendable (fail closed; PLAN.md decision #4).
  */
 
+import { NETWORK_CONFIG } from "@chainvue/verus-sdk";
 import { parseAmount } from "verus-rpc";
 
 /**
@@ -60,10 +61,75 @@ export function hardCapsFor(mode: AddressMode): HardCaps {
 }
 
 /**
+ * A per-call / trailing-24h cap pair for OFF-CHAIN v402 payments
+ * (`wallet_paid_fetch`), in satoshis. Deliberately separate from
+ * {@link HardCaps}: paid-fetch burns PREPAID credit that already left the
+ * wallet at topup time (where the on-chain caps applied), so these bound
+ * the RATE of burning that credit — they never double-count against the
+ * wallet-fund caps. No lifetime cap: the lifetime bound IS the sum of
+ * capped topups.
+ */
+export interface PaidFetchHardCaps {
+  readonly maxPerCallSats: bigint;
+  readonly maxPerDaySats: bigint;
+}
+
+/** Paid-fetch hard caps for the chain-native currency in VerusID mode. */
+export const PAID_FETCH_HARD_CAPS: PaidFetchHardCaps = Object.freeze({
+  maxPerCallSats: parseAmount("1"),
+  maxPerDaySats: parseAmount("25"),
+});
+
+/** Paid-fetch hard caps in starter mode (same rationale as STARTER_HARD_CAPS). */
+export const STARTER_PAID_FETCH_HARD_CAPS: PaidFetchHardCaps = Object.freeze({
+  maxPerCallSats: parseAmount("0.25"),
+  maxPerDaySats: parseAmount("5"),
+});
+
+/** The compiled paid-fetch ceiling that applies to a given address mode. */
+export function paidFetchHardCapsFor(mode: AddressMode): PaidFetchHardCaps {
+  return mode === "starter-r-address" ? STARTER_PAID_FETCH_HARD_CAPS : PAID_FETCH_HARD_CAPS;
+}
+
+/**
  * The chain-native currency of a PBaaS chain shares the chain's name
  * (VRSCTEST's native coin is "VRSCTEST"). Centralized here so the "is this
  * intent in the native currency?" question has exactly one answer.
  */
 export function nativeCurrencyOf(chain: SupportedChain): string {
   return chain;
+}
+
+/**
+ * The v402 WIRE identifier of a chain. The protocol's canonical payload
+ * requires a lowercase network id (`^[a-z0-9]+$`) and facilitators emit
+ * offers accordingly ("vrsctest"), while the wallet's {@link SupportedChain}
+ * keeps the chain's canonical uppercase name. Centralized here so every
+ * offer-vs-policy network comparison uses exactly one mapping.
+ */
+export function wireNetworkOf(chain: SupportedChain): string {
+  return chain.toLowerCase();
+}
+
+/**
+ * The v402 identity-signature system id (chain id) of a chain. An exhaustive
+ * switch so a new {@link SupportedChain} member is a compile error here
+ * rather than silently defaulting to the wrong chain's id.
+ */
+export function systemIdOf(chain: SupportedChain): string {
+  switch (chain) {
+    case "VRSCTEST":
+      return NETWORK_CONFIG.testnet.chainId;
+  }
+}
+
+/**
+ * Whether an intent/offer currency is the chain's native coin — the ONLY
+ * currency the compiled hard caps bound. Case-insensitive on purpose: the
+ * compiled ceiling is the file-edit-proof defense, so a policy (or a 402
+ * offer) that spells the native currency in a different case must not slip
+ * past it. Non-native currencies are bounded solely by their policy entry.
+ */
+export function isNativeCurrency(currency: string, chain: SupportedChain): boolean {
+  return currency.toLowerCase() === nativeCurrencyOf(chain).toLowerCase();
 }

@@ -20,7 +20,9 @@ import { z } from "zod";
 import { PolicyLimitError, PolicyParseError } from "../errors.js";
 import {
   hardCapsFor,
+  isNativeCurrency,
   nativeCurrencyOf,
+  paidFetchHardCapsFor,
   SUPPORTED_CHAINS,
   type AddressMode,
   type SupportedChain,
@@ -44,8 +46,10 @@ export interface FacilitatorPolicy {
   autoApprove: boolean;
   /**
    * The facilitator's HTTP base URL (its v402 API), when the operator
-   * recorded one — enables signed prepaid-balance queries. Optional:
-   * money movement never depends on it.
+   * recorded one — enables signed prepaid-balance queries, and since
+   * paid-fetch it is also the trust anchor a 402 offer's `facilitator`
+   * field must match before any payment is signed (offer-facilitator
+   * pinning). On-chain money movement never depends on it.
    */
   apiUrl?: string;
 }
@@ -54,6 +58,28 @@ export interface FacilitatorPolicy {
 export interface RecipientPolicy {
   name: string;
   address: string;
+}
+
+/**
+ * An allowlisted PAID SERVICE for `wallet_paid_fetch` — a v402-guarded API
+ * the agent may pay per request with PREPAID credit. The agent names the
+ * service; the wallet builds the URL from `origin`, so a prompt-injected
+ * URL has nowhere to go (the same names-not-addresses boundary the rest of
+ * the wallet enforces). `facilitator` names the allowlisted bank whose
+ * prepaid pool funds this service — the 402 offer must clear through
+ * exactly that facilitator's API. Caps bound the RATE of burning prepaid
+ * credit; they are not wallet-fund caps (those applied at topup time).
+ */
+export interface ServicePolicy {
+  name: string;
+  /** Normalized http(s) origin, e.g. "https://api.example.com" — no path. */
+  origin: string;
+  /** Allowlisted facilitator NAME whose prepaid balance funds this service. */
+  facilitator: string;
+  currency: string;
+  maxPricePerCallSats: bigint;
+  maxPerDaySats: bigint;
+  autoApprove: boolean;
 }
 
 /** Wallet-wide rate limits (counted across all currencies). */
@@ -72,6 +98,7 @@ export interface Policy {
   currencies: CurrencyPolicy[];
   facilitators: FacilitatorPolicy[];
   recipients: RecipientPolicy[];
+  services: ServicePolicy[];
   rate: RatePolicy;
   armRequired: boolean;
   confirmTimeoutSeconds: number;
@@ -128,8 +155,8 @@ const facilitatorEntrySchema = z
     maxPerTx: capSatsSchema,
     maxPerDay: capSatsSchema,
     autoApprove: z.boolean(),
-    // http(s) base URL of the facilitator's v402 API — display/read aid
-    // for prepaid-balance queries; never part of a money decision.
+    // http(s) base URL of the facilitator's v402 API — prepaid-balance
+    // queries plus the paid-fetch offer-facilitator pin (see interface doc).
     apiUrl: z.string().url().max(512).optional(),
   })
   .transform(
@@ -148,6 +175,59 @@ const recipientEntrySchema = z.strictObject({
   name: z.string().min(1).max(64),
   address: z.string().min(1),
 });
+
+/**
+ * A service origin: http(s), host only — any path, query, fragment or
+ * credentials in the configured value is a parse error (the request path is
+ * the AGENT's per-call input; the policy pins the origin and nothing else).
+ * Normalized to `URL.origin` so string comparison is canonical.
+ */
+const serviceOriginSchema = z
+  .string()
+  .max(512)
+  .transform((value, ctx): string => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      ctx.addIssue({ code: "custom", message: `not a valid URL: ${value}` });
+      return z.NEVER;
+    }
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      ctx.addIssue({ code: "custom", message: `origin must be http(s): ${value}` });
+      return z.NEVER;
+    }
+    if (url.pathname !== "/" || url.search !== "" || url.hash !== "" || url.username !== "") {
+      ctx.addIssue({
+        code: "custom",
+        message: `origin must not carry a path, query, fragment or credentials: ${value}`,
+      });
+      return z.NEVER;
+    }
+    return url.origin;
+  });
+
+const serviceEntrySchema = z
+  .strictObject({
+    name: z.string().min(1).max(64),
+    origin: serviceOriginSchema,
+    facilitator: z.string().min(1).max(64),
+    currency: z.string().min(1),
+    maxPricePerCall: capSatsSchema,
+    maxPerDay: capSatsSchema,
+    autoApprove: z.boolean(),
+  })
+  .transform(
+    (entry): ServicePolicy => ({
+      name: entry.name,
+      origin: entry.origin,
+      facilitator: entry.facilitator,
+      currency: entry.currency,
+      maxPricePerCallSats: entry.maxPricePerCall,
+      maxPerDaySats: entry.maxPerDay,
+      autoApprove: entry.autoApprove,
+    }),
+  );
 
 const rateSchema = z.strictObject({
   maxSendsPerHour: z.number().int().min(1).max(60),
@@ -168,7 +248,14 @@ const rateSchema = z.strictObject({
  *   address (the MCP layer resolves BY NAME — ambiguity is unresolvable);
  * - recipient names must be unique for the same reason;
  * - every facilitator's currency must have a cap entry (an entry in an
- *   unconfigured currency is dead config the operator believes is live).
+ *   unconfigured currency is dead config the operator believes is live);
+ * - service names and origins must be unique, and every service must
+ *   reference an existing facilitator budget entry IN ITS CURRENCY that has
+ *   an `apiUrl` — paid-fetch verifies the 402 offer clears through exactly
+ *   that facilitator API, so a service without that link could never pay
+ *   (dead config the operator believes is live).
+ *
+ * `services` defaults to [] so pre-0.2.0 policy files keep loading.
  */
 export const policyFileSchema = z
   .strictObject({
@@ -179,6 +266,7 @@ export const policyFileSchema = z
     currencies: z.array(currencyEntrySchema).min(1),
     facilitators: z.array(facilitatorEntrySchema).max(16),
     recipients: z.array(recipientEntrySchema).max(64),
+    services: z.array(serviceEntrySchema).max(64).default([]),
     rate: rateSchema,
     armRequired: z.boolean(),
     confirmTimeoutSeconds: z.number().int().min(30).max(600),
@@ -245,6 +333,47 @@ export const policyFileSchema = z
       }
       recipientNames.add(entry.name);
     }
+    const serviceNames = new Set<string>();
+    const serviceOrigins = new Set<string>();
+    for (const [index, entry] of policy.services.entries()) {
+      if (serviceNames.has(entry.name)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["services", index, "name"],
+          message: `duplicate service name: ${entry.name}`,
+        });
+      }
+      serviceNames.add(entry.name);
+      if (serviceOrigins.has(entry.origin)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["services", index, "origin"],
+          message: `duplicate service origin: ${entry.origin}`,
+        });
+      }
+      serviceOrigins.add(entry.origin);
+      const funding = policy.facilitators.find(
+        (candidate) =>
+          candidate.name === entry.facilitator && candidate.currency === entry.currency,
+      );
+      if (funding === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["services", index, "facilitator"],
+          message:
+            `service "${entry.name}" references facilitator "${entry.facilitator}" which has ` +
+            `no ${entry.currency} budget entry`,
+        });
+      } else if (funding.apiUrl === undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["services", index, "facilitator"],
+          message:
+            `service "${entry.name}" needs facilitator "${entry.facilitator}" to have an ` +
+            `apiUrl — paid-fetch must verify the 402 offer clears through that facilitator`,
+        });
+      }
+    }
   });
 
 /** The JSON-safe `policy.json` shape (what the CLI writes to disk). */
@@ -294,6 +423,31 @@ export function parsePolicy(json: unknown): Policy {
         `${nativeCurrency} ${field} of ${formatAmount(configured)} exceeds the compiled ` +
           `hard cap of ${formatAmount(cap)} for address mode "${policy.addressMode}"`,
       );
+    }
+  }
+
+  // Paid-fetch services in the native currency are bounded by their own
+  // compiled ceiling (same file-edit-proof rationale; non-native services
+  // are bounded solely by their mandatory policy caps).
+  const paidFetchCaps = paidFetchHardCapsFor(policy.addressMode);
+  for (const service of policy.services) {
+    // Case-insensitive: a service priced in a differently-cased spelling of
+    // the native currency must not skip the compiled paid-fetch ceiling.
+    if (!isNativeCurrency(service.currency, policy.network)) {
+      continue;
+    }
+    const serviceChecks = [
+      ["maxPricePerCall", service.maxPricePerCallSats, paidFetchCaps.maxPerCallSats],
+      ["maxPerDay", service.maxPerDaySats, paidFetchCaps.maxPerDaySats],
+    ] as const;
+    for (const [field, configured, cap] of serviceChecks) {
+      if (configured > cap) {
+        throw new PolicyLimitError(
+          `service "${service.name}" ${field} of ${formatAmount(configured)} exceeds the ` +
+            `compiled paid-fetch hard cap of ${formatAmount(cap)} for address mode ` +
+            `"${policy.addressMode}"`,
+        );
+      }
     }
   }
 

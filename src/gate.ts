@@ -25,9 +25,11 @@
 
 import type { AuditLog } from "./audit.js";
 import { SpendRejectedError, type SpendReceipt, type WalletBackend } from "./backend.js";
+import { errorDetail } from "./errors.js";
 import { renderConfirmMessage, type Confirmer } from "./confirm.js";
 import type { SpendIntent } from "./intents.js";
 import type { RequestSnapshot, SpendLedger } from "./ledger/ledger.js";
+import { SpendLock } from "./lock.js";
 import type { FailureStage, SpendApproval } from "./ledger/records.js";
 import { evaluatePolicy, type DenyCode } from "./policy/engine.js";
 import type { LoadedPolicy, PolicySource } from "./policy/load.js";
@@ -75,6 +77,12 @@ export interface WalletGateDeps {
   stateDir: string;
   /** Injectable clock for tests; defaults to the real one. */
   clock?: () => Date;
+  /**
+   * The single-flight lock. SHARED with the PaymentGate in production so
+   * only one money operation (one pending elicitation) runs at a time;
+   * defaults to a fresh per-gate lock for standalone tests.
+   */
+  lock?: SpendLock;
 }
 
 /**
@@ -91,19 +99,17 @@ function recipientListed(intent: SpendIntent, policy: Policy): boolean {
   );
 }
 
-function errorDetail(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /** The wallet gate. One instance per wallet process; see the module doc. */
 export class WalletGate {
   private readonly deps: WalletGateDeps;
   private readonly clock: () => Date;
-  private busy = false;
+  private readonly lock: SpendLock;
 
   constructor(deps: WalletGateDeps) {
     this.deps = deps;
     this.clock = deps.clock ?? (() => new Date());
+    this.lock = deps.lock ?? new SpendLock();
   }
 
   /**
@@ -117,19 +123,18 @@ export class WalletGate {
     // human) is in flight, so this one is refused rather than queued —
     // queued intents would execute against a world the caller no longer
     // sees. Not audited: contention is transient, not a policy event.
-    if (this.busy) {
+    if (!this.lock.tryAcquire()) {
       return {
         status: "denied",
         requestId: intent.requestId,
         reasonCode: "spend-in-flight",
-        humanText: "Another spend is already in flight. Retry after it settles.",
+        humanText: "Another money operation is already in flight. Retry after it settles.",
       };
     }
-    this.busy = true;
     try {
       return await this.run(intent);
     } finally {
-      this.busy = false;
+      this.lock.release();
     }
   }
 

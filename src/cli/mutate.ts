@@ -113,6 +113,49 @@ export function cmdAllow(argv: readonly string[], ctx: CliContext): number {
     ctx.out(`recipient "${name}" → ${address} allowlisted (sends always need confirmation)`);
     return 0;
   }
+  if (kind === "service") {
+    if (name === undefined) {
+      throw new CliUsageError(
+        "usage: peculium allow service <name> --origin <https://api.…> --facilitator <name> " +
+          "--max-per-call X --max-per-day Y [--currency C] [--auto-approve]",
+      );
+    }
+    const originRaw = flags.get("origin") ?? flags.get("host");
+    if (typeof originRaw !== "string") {
+      throw new CliUsageError("--origin (or --host) requires a value");
+    }
+    // --host accepts a bare hostname; default it to https.
+    const origin = originRaw.includes("://") ? originRaw : `https://${originRaw}`;
+    const facilitator = requireValue(flags, "facilitator");
+    const maxPerCall = requireValue(flags, "max-per-call");
+    const maxPerDay = requireValue(flags, "max-per-day");
+    parsePositiveAmount(maxPerCall, "--max-per-call");
+    parsePositiveAmount(maxPerDay, "--max-per-day");
+    const currency =
+      typeof flags.get("currency") === "string" ? (flags.get("currency") as string) : ctx.chain;
+    const autoApprove = flags.has("auto-approve");
+    editPolicy(ctx, `allow service ${name}`, (input) => {
+      input.services = [
+        ...(input.services ?? []),
+        {
+          name,
+          origin,
+          facilitator,
+          currency,
+          maxPricePerCall: maxPerCall,
+          maxPerDay,
+          autoApprove,
+        },
+      ];
+    });
+    ctx.out(
+      `service "${name}" → ${origin} [${currency}] via facilitator "${facilitator}", ` +
+        `call ≤ ${maxPerCall}, day ≤ ${maxPerDay}` +
+        `${autoApprove ? ", auto-approve" : " (every call asks the human)"}`,
+    );
+    ctx.out(`(paid-fetch burns PREPAID credit at "${facilitator}" — top it up to use this)`);
+    return 0;
+  }
   if (kind === "facilitator") {
     if (name === undefined || address === undefined) {
       throw new CliUsageError(
@@ -147,14 +190,16 @@ export function cmdAllow(argv: readonly string[], ctx: CliContext): number {
     );
     return 0;
   }
-  throw new CliUsageError("usage: peculium allow <recipient|facilitator> …");
+  throw new CliUsageError("usage: peculium allow <recipient|facilitator|service> …");
 }
 
 export function cmdRevoke(argv: readonly string[], ctx: CliContext): number {
   const { positionals, flags } = parseArgs(argv);
   const [kind, name] = positionals;
-  if (name === undefined || (kind !== "recipient" && kind !== "facilitator")) {
-    throw new CliUsageError("usage: peculium revoke <recipient|facilitator> <name> [--currency C]");
+  if (name === undefined || (kind !== "recipient" && kind !== "facilitator" && kind !== "service")) {
+    throw new CliUsageError(
+      "usage: peculium revoke <recipient|facilitator|service> <name> [--currency C]",
+    );
   }
   const currency = flags.get("currency");
   let removed = 0;
@@ -163,6 +208,10 @@ export function cmdRevoke(argv: readonly string[], ctx: CliContext): number {
       const before = input.recipients.length;
       input.recipients = input.recipients.filter((entry) => entry.name !== name);
       removed = before - input.recipients.length;
+    } else if (kind === "service") {
+      const services = input.services ?? [];
+      input.services = services.filter((entry) => entry.name !== name);
+      removed = services.length - input.services.length;
     } else {
       const before = input.facilitators.length;
       input.facilitators = input.facilitators.filter(
@@ -267,9 +316,11 @@ export async function cmdResolve(argv: readonly string[], ctx: CliContext): Prom
   const requestId = positionals[0];
   const spentTxid = flags.get("spent");
   const notSpent = flags.has("not-spent");
-  if (requestId === undefined || (typeof spentTxid !== "string") === !notSpent) {
+  // A bare --spent (no txid) is valid for OFF-CHAIN paid-fetch rows: the
+  // evidence is the facilitator's ledger statement, not a transaction.
+  if (requestId === undefined || flags.has("spent") === notSpent) {
     throw new CliUsageError(
-      "usage: peculium resolve <requestId> (--spent <txid> | --not-spent)  |  " +
+      "usage: peculium resolve <requestId> (--spent [txid] | --not-spent)  |  " +
         "peculium resolve --repair-tail [--yes]",
     );
   }
@@ -280,14 +331,28 @@ export async function cmdResolve(argv: readonly string[], ctx: CliContext): Prom
   const ledger = SpendLedger.open(ctx.dir, { clock: ctx.clock });
   try {
     const outcome = notSpent ? ("not-spent" as const) : ("spent" as const);
-    ledger.recordResolved(requestId, outcome, notSpent ? null : (spentTxid as string), "cli-resolve");
+    const txid = typeof spentTxid === "string" ? spentTxid : null;
+    // On-chain rows resolve as spent only WITH the txid as evidence; the
+    // bare form is reserved for off-chain paid-fetch rows (no txid exists).
+    if (outcome === "spent" && txid === null) {
+      const row = ledger.getOutcome(requestId);
+      if (row === null || row.kind !== "paid-fetch") {
+        throw new CliUsageError(
+          `resolving ${requestId} as spent needs the txid (--spent <txid>) — ` +
+            `only off-chain paid-fetch rows resolve without one`,
+        );
+      }
+    }
+    ledger.recordResolved(requestId, outcome, txid, "cli-resolve");
     const audit = AuditLog.open(ctx.dir, { clock: ctx.clock });
     audit.write({ event: "ledger-recovery", requestId, action: `resolved-${outcome}` });
     audit.close();
     ctx.out(
       outcome === "not-spent"
         ? `${requestId} resolved as NOT spent — the reservation is released`
-        : `${requestId} resolved as spent (txid ${String(spentTxid).slice(0, 12)}…)`,
+        : txid === null
+          ? `${requestId} resolved as spent (off-chain — no txid)`
+          : `${requestId} resolved as spent (txid ${txid.slice(0, 12)}…)`,
     );
     return 0;
   } finally {

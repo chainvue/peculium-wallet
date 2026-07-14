@@ -11,6 +11,9 @@ importers:
       '@chainvue/v402-client-fetch':
         specifier: ^0.2.0
         version: 0.2.0
+      '@chainvue/v402-protocol':
+        specifier: ^0.2.0
+        version: 0.2.0
       '@chainvue/v402-signer-verus':
         specifier: ^0.1.2
         version: 0.1.2

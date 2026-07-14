@@ -43,7 +43,7 @@ export const auditLineSchema = z.discriminatedUnion("event", [
     event: z.literal("intent-denied"),
     requestId: requestIdField,
     reasonCode: z.string().min(1),
-    kind: z.enum(["topup", "send"]),
+    kind: z.enum(["topup", "send", "paid-fetch"]),
     recipientName: z.string().min(1),
     currency: z.string().min(1),
     amountSats: z.string().regex(/^(0|[1-9]\d*)$/, "must be an integer satoshi string"),
@@ -73,6 +73,13 @@ export const auditLineSchema = z.discriminatedUnion("event", [
     requestId: requestIdField,
     action: z.string().min(1),
   }),
+  z.strictObject({
+    ...baseFields,
+    event: z.literal("paid-fetch-no-payment"),
+    requestId: requestIdField,
+    service: z.string().min(1),
+    httpStatus: z.number().int(),
+  }),
 ]);
 
 export type AuditLine = z.infer<typeof auditLineSchema>;
@@ -89,7 +96,7 @@ export type AuditEvent =
       event: "intent-denied";
       requestId: string;
       reasonCode: string;
-      kind: "topup" | "send";
+      kind: "topup" | "send" | "paid-fetch";
       recipientName: string;
       currency: string;
       amountSats: bigint;
@@ -99,7 +106,8 @@ export type AuditEvent =
   | { event: "policy-reload"; oldHash: string; newHash: string }
   | { event: "server-start" }
   | { event: "server-stop" }
-  | { event: "ledger-recovery"; requestId: string; action: string };
+  | { event: "ledger-recovery"; requestId: string; action: string }
+  | { event: "paid-fetch-no-payment"; requestId: string; service: string; httpStatus: number };
 
 /**
  * Best-effort append-only audit log. Construct via {@link AuditLog.open};

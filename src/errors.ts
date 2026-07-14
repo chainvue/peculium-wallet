@@ -9,6 +9,11 @@
  * to refuse to operate at all (fail closed).
  */
 
+/** Human-readable detail of an unknown thrown value (never throws itself). */
+export function errorDetail(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Base class for all Peculium errors; `code` is stable across releases. */
 export class PeculiumError extends Error {
   readonly code: string;

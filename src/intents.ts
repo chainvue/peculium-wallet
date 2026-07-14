@@ -45,6 +45,35 @@ export interface SendIntent extends SpendIntentBase {
 export type SpendIntent = TopupIntent | SendIntent;
 
 /**
+ * An OFF-CHAIN v402 per-request payment (`wallet_paid_fetch`): a signature
+ * against PREPAID credit, not a blockchain transaction. Reuses the base
+ * shape so the ledger records it uniformly: `recipientName` is the
+ * allowlist SERVICE name, `recipientAddress` its normalized origin,
+ * `amountSats`/`currency` are the 402 offer's price — vetted by the engine
+ * BEFORE any signature exists. The offer fields ride along so the pure
+ * engine can pin them against the policy (network, currency, domain,
+ * facilitator) without doing any IO itself.
+ */
+export interface PaidFetchIntent extends SpendIntentBase {
+  kind: "paid-fetch";
+  /** Uppercase HTTP method of the guarded call. */
+  method: string;
+  /** Request-target (path + query) — validated input, appended to the origin. */
+  path: string;
+  /** `network` advertised by the 402 offer (must equal the policy network). */
+  offerNetwork: string;
+  /** `payTo` identity of the offer (recorded for audit; not a policy input). */
+  payTo: string;
+  /** Facilitator base URL advertised by the offer (pinned to the allowlist). */
+  offerFacilitator: string;
+  /** `canonicalDomain` the payment signature would bind (pinned to the origin). */
+  canonicalDomain: string;
+}
+
+/** Everything the ledger records: on-chain spends plus off-chain payments. */
+export type MoneyIntent = SpendIntent | PaidFetchIntent;
+
+/**
  * Canonical dedupe fingerprint (layer two of idempotency): sha256 hex over
  * kind, resolved address, currency and the exact satoshi amount — and
  * NOTHING else. `requestId` and display names are deliberately excluded:
@@ -52,7 +81,7 @@ export type SpendIntent = TopupIntent | SendIntent;
  * same", otherwise a retry loop could sidestep the dedupe window by
  * varying a label while repeating the identical transfer.
  */
-export function intentFingerprint(intent: SpendIntent): string {
+export function intentFingerprint(intent: MoneyIntent): string {
   const canonical = `${intent.kind}\n${intent.recipientAddress}\n${intent.currency}\n${intent.amountSats}`;
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }

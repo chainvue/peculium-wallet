@@ -28,7 +28,7 @@ import {
   cmdSet,
 } from "../src/cli/mutate.js";
 import { runCli } from "../src/cli/run.js";
-import { send } from "./helpers.js";
+import { paidFetch, send } from "./helpers.js";
 
 const NOW = new Date("2026-07-13T12:00:00.000Z");
 const PASSPHRASE = "cli-test-passphrase";
@@ -385,6 +385,36 @@ describe("resolve", () => {
     const row = snapshot.rows.find((r) => r.requestId === "req-cli-res1");
     expect(row?.state).toBe("resolved");
     expect(row?.countsAsSpent).toBe(false);
+  });
+
+  it("settles an ambiguous paid-fetch as spent with a bare --spent (no txid exists)", async () => {
+    const harness = await initialized();
+    const ledger = SpendLedger.open(harness.dir, { clock: () => NOW });
+    ledger.recordPending(paidFetch({ requestId: "req-cli-res2" }), "auto", "hash");
+    ledger.recordAmbiguous("req-cli-res2", "payment-transport-error");
+    ledger.close();
+
+    const code = await cmdResolve(["req-cli-res2", "--spent"], harness.ctx);
+    expect(code).toBe(0);
+    const snapshot = readLedgerSnapshot(harness.dir);
+    const row = snapshot.rows.find((r) => r.requestId === "req-cli-res2");
+    expect(row?.state).toBe("resolved");
+    expect(row?.countsAsSpent).toBe(true);
+  });
+
+  it("refuses a bare --spent for an on-chain row (the txid is the evidence)", async () => {
+    const harness = await initialized();
+    const ledger = SpendLedger.open(harness.dir, { clock: () => NOW });
+    ledger.recordPending(send({ requestId: "req-cli-res3" }), "auto", "hash");
+    ledger.recordAmbiguous("req-cli-res3", "broadcast-transport-error");
+    ledger.close();
+
+    await expect(cmdResolve(["req-cli-res3", "--spent"], harness.ctx)).rejects.toThrow(
+      /needs the txid/,
+    );
+    const snapshot = readLedgerSnapshot(harness.dir);
+    const row = snapshot.rows.find((r) => r.requestId === "req-cli-res3");
+    expect(row?.state).toBe("ambiguous");
   });
 
   it("repairs a torn ledger tail with --yes (backup kept)", async () => {
