@@ -38,11 +38,11 @@ import {
 import { readKeystoreFile, unlockKeystore } from "./keystore.js";
 import { nativeCurrencyOf, type SupportedChain } from "./limits.js";
 
-/** The SDK's UTXO input shape (satoshis as a plain number). */
+/** The SDK's UTXO input shape (satoshis as exact bigint). */
 interface SdkUtxo {
   txid: string;
   outputIndex: number;
-  satoshis: number;
+  satoshis: bigint;
   script: string;
   height?: number;
 }
@@ -62,15 +62,6 @@ export interface LiteBackendDeps {
 
 function errorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** `Utxo.satoshis` crosses into the SDK as a number; refuse unsafe values. */
-function toSafeNumber(sats: bigint, what: string): number {
-  const value = Number(sats);
-  if (!Number.isSafeInteger(value)) {
-    throw new SpendRejectedError("build", `${what} exceeds the safe integer range: ${sats}`);
-  }
-  return value;
 }
 
 /** The v1 lite execution backend. See the module doc for the sequence. */
@@ -170,7 +161,7 @@ export class LiteBackend implements WalletBackend {
         .map((utxo) => ({
           txid: utxo.txid,
           outputIndex: utxo.outputIndex,
-          satoshis: toSafeNumber(utxo.satoshis, `utxo ${utxo.txid}:${utxo.outputIndex}`),
+          satoshis: utxo.satoshis,
           script: utxo.script,
           height: utxo.height ?? 0,
         }));
@@ -211,7 +202,7 @@ export class LiteBackend implements WalletBackend {
           outputs: [
             {
               currency: currencyId,
-              satoshis: instruction.amountSats.toString(),
+              satoshis: instruction.amountSats,
               address: instruction.toAddress,
               addressType: instruction.toAddress.startsWith("i") ? "ID" : "PKH",
             },
@@ -353,7 +344,7 @@ export class LiteBackend implements WalletBackend {
       out.push({
         txid: delta.txid,
         outputIndex: delta.index,
-        satoshis: toSafeNumber(delta.satoshis, `mempool change ${outpoint}`),
+        satoshis: delta.satoshis,
         script,
         height: 0,
       });

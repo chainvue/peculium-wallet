@@ -106,14 +106,14 @@ async function waitForConfirmation(
 async function fetchFundingUtxos(
   client: VerusClient,
   address: string,
-): Promise<{ txid: string; outputIndex: number; satoshis: number; script: string; height: number }[]> {
+): Promise<{ txid: string; outputIndex: number; satoshis: bigint; script: string; height: number }[]> {
   const confirmed = await client.addressIndex.getAddressUtxos({ addresses: [address] });
   return confirmed
     .filter((utxo) => utxo.satoshis > 0n)
     .map((utxo) => ({
       txid: utxo.txid,
       outputIndex: utxo.outputIndex,
-      satoshis: Number(utxo.satoshis),
+      satoshis: utxo.satoshis,
       script: utxo.script,
       height: utxo.height ?? 0,
     }));

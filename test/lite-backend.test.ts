@@ -122,7 +122,7 @@ describe("LiteBackend happy path", () => {
     expect(receipt.changeOutpoint).toBe(`${BROADCAST_TXID}:${changeIndex}`);
     // Recipient got the exact amount.
     const paid = summary.outputs.find((o) => o.address === TEST_ADDRESS_B);
-    expect(paid?.valueSat).toBe(100_000_000);
+    expect(paid?.valueSat).toBe(100_000_000n);
     warn.mockRestore();
   });
 
@@ -324,7 +324,7 @@ describe("LiteBackend identity mode (i-address agent)", () => {
     const summary = sdkUtils.summarizeSignedTransaction(sends[0]?.params[0] as string, "testnet");
     // Recipient paid exactly; change decodes to the i-address (P2ID output).
     const paid = summary.outputs.find((o) => o.address === TEST_ADDRESS_B);
-    expect(paid?.valueSat).toBe(100_000_000);
+    expect(paid?.valueSat).toBe(100_000_000n);
     const change = summary.outputs.find((o) => o.address === ID_ADDRESS);
     expect(change).toBeDefined();
     expect(receipt.changeOutpoint).toBe(
