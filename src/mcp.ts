@@ -1,7 +1,7 @@
 /**
  * The MCP surface — the ONLY thing the LLM can touch (DESIGN.md §7).
  *
- * Seven tools, split by trust:
+ * Ten tools, split by trust:
  *
  * - read-only, no gate: `wallet_balance`, `wallet_receive_address`,
  *   `wallet_list_recipients`, `wallet_transaction_status`;

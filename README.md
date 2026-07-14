@@ -14,10 +14,11 @@ code, not in configuration. Do not point it at funds you care about.
 
 **The LLM is untrusted input.** Every design decision follows from that:
 
-- The agent gets **seven narrow tools** (balance, receive address, list
-  recipients, precheck, topup, send, transaction status). There is no tool
-  that changes policy, adds a recipient, raises a cap, or touches a key —
-  those are CLI-only, human-only.
+- The agent gets **ten narrow tools** (balance, receive address, list
+  recipients, prepaid balance, spending report, financial position,
+  precheck, topup, send, transaction status). There is no tool that changes
+  policy, adds a recipient, raises a cap, or touches a key — those are
+  CLI-only, human-only.
 - **Recipients are names, never addresses.** The agent names an allowlist
   entry; the wallet resolves and re-validates it against the current
   policy. Prompt-injected addresses have nowhere to go.
@@ -52,18 +53,18 @@ back spent funds.
 
 ```bash
 # 1. provision a wallet (fresh key, tiny caps, VRSCTEST)
-npx @chainvue/peculium init --starter
+npx @chainvue/peculium-wallet init --starter
 
 # 2. fund the printed address (faucet: https://faucet.verus.services)
 
 # 3. check everything
-npx @chainvue/peculium doctor
+npx @chainvue/peculium-wallet doctor
 
 # 4. add the printed block to your MCP host config, with your passphrase in
 #    PECULIUM_KEYSTORE_PASSPHRASE, and restart the host
 
 # 5. allow a recipient (the agent can only use names you allowlist)
-npx @chainvue/peculium allow recipient alice RBob…
+npx @chainvue/peculium-wallet allow recipient alice RBob…
 ```
 
 The agent can now `wallet_precheck` / `wallet_send` — every send pops a
@@ -75,6 +76,8 @@ remaining budget. `peculium history` shows everything it tried.
 | Tool | Gate |
 |---|---|
 | `wallet_balance`, `wallet_receive_address`, `wallet_list_recipients` | read-only |
+| `wallet_prepaid_balance` | read-only — signed balance query at a v402 facilitator |
+| `wallet_spending_report`, `wallet_financial_position` | read-only — ledger aggregates, cockpit + runway |
 | `wallet_precheck` | dry-run — never reserves, never spends |
 | `wallet_transaction_status` | read-only + confirmation refresh |
 | `wallet_topup_facilitator` | full gate; may auto-approve within the facilitator budget |

@@ -1,4 +1,4 @@
-// @chainvue/peculium — public library surface.
+// @chainvue/peculium-wallet — public library surface.
 //
 // Peculium is an MCP server + CLI that lets an AI agent move Verus money
 // inside human-configured, agent-immutable policy. Lite architecture:

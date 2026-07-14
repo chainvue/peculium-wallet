@@ -144,7 +144,7 @@ export async function cmdInit(argv: readonly string[], ctx: CliContext): Promise
         mcpServers: {
           peculium: {
             command: "npx",
-            args: ["-y", "@chainvue/peculium", "mcp"],
+            args: ["-y", "@chainvue/peculium-wallet", "mcp"],
             env: { PECULIUM_KEYSTORE_PASSPHRASE: "<your keystore passphrase>" },
           },
         },

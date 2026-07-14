@@ -1,9 +1,9 @@
-# Release — publish @chainvue/peculium to npm via OIDC trusted publishing.
+# Release — publish @chainvue/peculium-wallet to npm via OIDC trusted publishing.
 # Same trigger model as chainvue/verus-rpc: MANUAL workflow_dispatch on
 # main; the release event is the version-bump commit.
 #
 # One-time prerequisite: trusted-publisher registration on npmjs.com for
-# @chainvue/peculium (repo chainvue/peculium, workflow release.yml).
+# @chainvue/peculium-wallet (repo chainvue/peculium-wallet, workflow release.yml).
 #
 # The smoke job is the PUBLISH-CHECKLIST "fresh-machine acceptance": npx
 # init --starter + doctor against the public testnet node, from the
@@ -77,7 +77,7 @@ jobs:
       - name: Wait for registry
         run: |
           for i in $(seq 1 30); do
-            if npm view "@chainvue/peculium@${{ steps.v.outputs.version }}" version >/dev/null 2>&1; then
+            if npm view "@chainvue/peculium-wallet@${{ steps.v.outputs.version }}" version >/dev/null 2>&1; then
               echo "available"; exit 0
             fi
             echo "waiting ($i)"; sleep 5
@@ -89,7 +89,7 @@ jobs:
           PECULIUM_KEYSTORE_PASSPHRASE: smoke-passphrase-ci-only
           PECULIUM_DIR: /tmp/peculium-smoke
         run: |
-          npx -y "@chainvue/peculium@${{ steps.v.outputs.version }}" init --starter --dir /tmp/peculium-smoke
+          npx -y "@chainvue/peculium-wallet@${{ steps.v.outputs.version }}" init --starter --dir /tmp/peculium-smoke
           # doctor exit code = number of failed checks; a fresh wallet warns
           # (0 balance) but must not FAIL any check.
-          npx -y "@chainvue/peculium@${{ steps.v.outputs.version }}" doctor --dir /tmp/peculium-smoke
+          npx -y "@chainvue/peculium-wallet@${{ steps.v.outputs.version }}" doctor --dir /tmp/peculium-smoke
