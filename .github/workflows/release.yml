@@ -1,20 +1,33 @@
-# Release — publish @chainvue/peculium-wallet to npm via OIDC trusted publishing.
-# Same trigger model as chainvue/verus-rpc: MANUAL workflow_dispatch on
-# main; the release event is the version-bump commit.
+# Release — automated via semantic-release (Conventional Commits).
 #
-# One-time prerequisite: trusted-publisher registration on npmjs.com for
-# @chainvue/peculium-wallet (repo chainvue/peculium-wallet, workflow release.yml).
+# Zero-touch: every push to `main` runs semantic-release; a releasable change
+# (feat → minor, fix → patch; a BREAKING change stays 0.x → minor per
+# .releaserc.json releaseRules) computes the next version, updates package.json
+# + CHANGELOG.md, publishes, tags, and creates the GitHub release. No releasable
+# commits → no-op. Preview with the workflow_dispatch dry-run.
 #
-# The smoke job is the PUBLISH-CHECKLIST "fresh-machine acceptance": npx
-# init --starter + doctor against the public testnet node, from the
-# registry artifact — no local Verus software anywhere.
+# Publish: semantic-release owns versioning only; the actual publish is the
+# proven OIDC `pnpm publish` (exec plugin) — @semantic-release/npm runs
+# npmPublish:false so no NPM token is needed; provenance via id-token:write.
+# One-time trusted-publisher registration (package @chainvue/peculium-wallet,
+# repo chainvue/peculium-wallet, workflow release.yml) applies.
+#
+# CUTOVER (one-time): push the baseline tag `v0.1.0` BEFORE the first main push
+# so version computation continues from there (else it jumps to 1.0.0).
+#
+# Security: this job holds id-token:write (npm publish rights). Actions are
+# SHA-pinned (tag-hijack defense); token scope is least-privilege (contents +
+# id-token; github-plugin comments/labels disabled in .releaserc.json). `main`
+# must let GITHUB_TOKEN push the release commit + tag.
 name: Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Dry run: build, test and pack, but do not publish"
+        description: "Dry run: compute the next version + notes, but do not publish or tag"
         type: boolean
         default: false
 
@@ -26,18 +39,19 @@ permissions: {}
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
-      contents: read
-      id-token: write # OIDC token for npm trusted publishing
+      contents: write # semantic-release pushes the release commit + tag
+      id-token: write # OIDC token for npm trusted publishing (provenance)
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0 # full history + tags: semantic-release needs them
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 26
           cache: pnpm
@@ -45,34 +59,48 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
-      - name: Full gate (prepublishOnly)
-        run: pnpm run build && pnpm run typecheck && pnpm run lint && pnpm run test
+      - name: Build
+        run: pnpm build
 
-      - name: Publish
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+      - name: Release
         run: >-
-          pnpm publish --no-git-checks
-          ${{ inputs.dry_run && '--dry-run' || '' }}
+          pnpm exec semantic-release
+          ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }}
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_PROVENANCE: "true"
 
   smoke:
     needs: release
-    if: ${{ !inputs.dry_run }}
+    if: ${{ github.event_name == 'push' || !inputs.dry_run }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 26
+          # This job is npm-only; without this, setup-node sees the workspace
+          # packageManager field and demands a pnpm binary for its cache.
           package-manager-cache: false
 
-      - name: Resolve version
+      # Validate whatever is currently latest on the registry (new version if
+      # this run published; the existing latest on a no-op — harmless recheck).
+      - name: Resolve latest published version
         id: v
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(npm view @chainvue/peculium-wallet version)" >> "$GITHUB_OUTPUT"
 
       - name: Wait for registry
         run: |
