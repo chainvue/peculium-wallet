@@ -1,5 +1,16 @@
 # Changelog
 
+Format follows [Keep a Changelog](https://keepachangelog.com): newest first,
+one section per released version headed `## <version> (<date>) — <summary>`.
+Record changes under **[Unreleased]** as you make them; at release, rename that
+heading to the version. This file is adopter-facing ("what changed, what
+breaks") — design rationale lives in RISKS.md.
+
+## [Unreleased]
+
+<!-- Add entries here in the same commit as the change; rename this heading to
+     the new version at release time. -->
+
 ## 0.2.0 (2026-07-14) — wallet_paid_fetch: one client for everything
 
 Peculium is now the SINGLE agent-side v402 client: topup, prepaid balance
