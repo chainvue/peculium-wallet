@@ -3,7 +3,7 @@
 // wire quirk of getaddressbalance is exercised for real.
 
 import { describe, expect, it } from "vitest";
-import { MockTransport, VerusClient } from "verus-rpc";
+import { MockTransport, VerusClient } from "@chainvue/verus-rpc";
 
 import { PublicNodeReader } from "../src/reader.js";
 

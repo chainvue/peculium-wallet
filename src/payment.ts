@@ -41,7 +41,7 @@ import {
   type PaymentRequirement,
 } from "@chainvue/v402-protocol";
 import { LocalKeySigner, type Signer } from "@chainvue/v402-signer-verus";
-import { parseAmount } from "verus-rpc";
+import { parseAmount } from "@chainvue/verus-rpc";
 
 import { errorDetail, PeculiumError } from "./errors.js";
 import { readKeystoreFile, unlockKeystore } from "./keystore.js";

@@ -30,7 +30,7 @@
 import { V402Client } from "@chainvue/v402-client-fetch";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
-import { formatAmount, parseAmount } from "verus-rpc";
+import { formatAmount, parseAmount } from "@chainvue/verus-rpc";
 import { z } from "zod";
 
 import { errorDetail } from "./errors.js";

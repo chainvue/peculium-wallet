@@ -26,7 +26,7 @@ import {
   identity as sdkIdentity,
   utils as sdkUtils,
 } from "@chainvue/verus-sdk";
-import { TransportError, VerusRpcError, type VerusClient } from "verus-rpc";
+import { TransportError, VerusRpcError, type VerusClient } from "@chainvue/verus-rpc";
 
 import {
   SpendRejectedError,

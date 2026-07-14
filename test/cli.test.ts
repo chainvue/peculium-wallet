@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { MockTransport, VerusClient } from "verus-rpc";
+import { MockTransport, VerusClient } from "@chainvue/verus-rpc";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { readKeystoreFile } from "../src/keystore.js";

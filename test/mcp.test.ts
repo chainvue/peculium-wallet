@@ -11,7 +11,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ElicitRequestSchema, type ElicitResult } from "@modelcontextprotocol/sdk/types.js";
-import { parseAmount } from "verus-rpc";
+import { parseAmount } from "@chainvue/verus-rpc";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AuditLog } from "../src/audit.js";

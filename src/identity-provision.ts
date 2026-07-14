@@ -15,7 +15,7 @@
  */
 
 import { VerusSDK, utils as sdkUtils } from "@chainvue/verus-sdk";
-import type { VerusClient } from "verus-rpc";
+import type { VerusClient } from "@chainvue/verus-rpc";
 
 import { PeculiumError } from "./errors.js";
 import type { SupportedChain } from "./limits.js";

@@ -2,7 +2,7 @@
 // on-chain engine tests: pure inputs, fixed clock, boundaries exercised at
 // cap and cap+1 sat, every deny code reachable, tier decided last.
 
-import { parseAmount } from "verus-rpc";
+import { parseAmount } from "@chainvue/verus-rpc";
 import { describe, expect, it } from "vitest";
 
 import { evaluatePaidFetch } from "../src/policy/engine.js";

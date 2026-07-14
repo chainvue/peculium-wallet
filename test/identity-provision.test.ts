@@ -3,7 +3,7 @@
 // order, the commitment-output handoff and the on-chain verification step.
 
 import { utils as sdkUtils, VerusSDK } from "@chainvue/verus-sdk";
-import { MockTransport, VerusClient } from "verus-rpc";
+import { MockTransport, VerusClient } from "@chainvue/verus-rpc";
 import { describe, expect, it } from "vitest";
 
 import { IdentityProvisionError, provisionIdentity } from "../src/identity-provision.js";

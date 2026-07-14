@@ -8,7 +8,7 @@
  * change is audited with old/new hash.
  */
 
-import { formatAmount } from "verus-rpc";
+import { formatAmount } from "@chainvue/verus-rpc";
 
 import { AuditLog } from "../audit.js";
 import { SpendLedger } from "../ledger/ledger.js";

@@ -14,7 +14,7 @@
  * The later load.ts owns reading, permission checks and reload-on-change.
  */
 
-import { formatAmount, parseAmount } from "verus-rpc";
+import { formatAmount, parseAmount } from "@chainvue/verus-rpc";
 import { z } from "zod";
 
 import { PolicyLimitError, PolicyParseError } from "../errors.js";

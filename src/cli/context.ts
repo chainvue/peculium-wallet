@@ -11,7 +11,7 @@ import * as path from "node:path";
 import * as readline from "node:readline/promises";
 import { Writable } from "node:stream";
 
-import { parseAmount, VerusClient } from "verus-rpc";
+import { parseAmount, VerusClient } from "@chainvue/verus-rpc";
 
 import { PeculiumError } from "../errors.js";
 import { parseLedgerLine, type LedgerRecord } from "../ledger/records.js";

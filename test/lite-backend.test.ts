@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { identity as sdkIdentity, utils as sdkUtils } from "@chainvue/verus-sdk";
-import { MockTransport, VerusClient } from "verus-rpc";
+import { MockTransport, VerusClient } from "@chainvue/verus-rpc";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { SpendRejectedError, SpendUncertainError, type SpendInstruction } from "../src/backend.js";

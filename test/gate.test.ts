@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { parseAmount } from "verus-rpc";
+import { parseAmount } from "@chainvue/verus-rpc";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AuditLog, auditLineSchema, type AuditLine } from "../src/audit.js";

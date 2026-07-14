@@ -17,7 +17,7 @@
  * (RISKS.md: no midnight-reset gaming, no timezone questions).
  */
 
-import { formatAmount } from "verus-rpc";
+import { formatAmount } from "@chainvue/verus-rpc";
 
 import {
   intentFingerprint,

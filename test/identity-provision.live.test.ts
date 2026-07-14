@@ -11,7 +11,7 @@
 // PECULIUM_LIVE_ID=1 + VERUS_RPC_URL/USER/PASS. Runtime ~3-6 min.
 
 import { VerusSDK } from "@chainvue/verus-sdk";
-import { VerusClient } from "verus-rpc";
+import { VerusClient } from "@chainvue/verus-rpc";
 import { describe, expect, it } from "vitest";
 
 import { provisionIdentity } from "../src/identity-provision.js";

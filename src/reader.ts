@@ -13,7 +13,7 @@
  * stays the invariant everywhere money is decided (UX-GAPS #10).
  */
 
-import { VerusRpcError, type VerusClient } from "verus-rpc";
+import { VerusRpcError, type VerusClient } from "@chainvue/verus-rpc";
 
 /** One currency's balance at an address, in satoshis. */
 export interface CurrencyBalance {

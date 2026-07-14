@@ -14,7 +14,7 @@ import * as path from "node:path";
 
 import { NETWORK_CONFIG } from "@chainvue/verus-sdk";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { VerusClient } from "verus-rpc";
+import { VerusClient } from "@chainvue/verus-rpc";
 
 import { AuditLog } from "./audit.js";
 import { PECULIUM_VERSION } from "./index.js";

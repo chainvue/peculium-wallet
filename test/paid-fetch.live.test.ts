@@ -23,7 +23,7 @@ import * as path from "node:path";
 import { V402Client } from "@chainvue/v402-client-fetch";
 import { LocalKeySigner } from "@chainvue/v402-signer-verus";
 import { NETWORK_CONFIG } from "@chainvue/verus-sdk";
-import { parseAmount, VerusClient } from "verus-rpc";
+import { parseAmount, VerusClient } from "@chainvue/verus-rpc";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { AuditLog } from "../src/audit.js";

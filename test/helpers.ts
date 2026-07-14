@@ -2,7 +2,7 @@
 // the real parsePolicy so the fixtures themselves prove the schema accepts
 // realistic configs.
 
-import { parseAmount } from "verus-rpc";
+import { parseAmount } from "@chainvue/verus-rpc";
 
 import type { PaidFetchIntent, SendIntent, TopupIntent } from "../src/intents.js";
 import type { LedgerView } from "../src/policy/engine.js";

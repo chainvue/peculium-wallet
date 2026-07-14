@@ -5,7 +5,7 @@
  * identities you control elsewhere — see docs/IDENTITY-RUNBOOK.md.
  */
 
-import { formatAmount, VerusClient } from "verus-rpc";
+import { formatAmount, VerusClient } from "@chainvue/verus-rpc";
 
 import { provisionIdentity } from "../identity-provision.js";
 import { readKeystoreFile, unlockKeystore } from "../keystore.js";

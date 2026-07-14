@@ -13,7 +13,7 @@
  */
 
 import { NETWORK_CONFIG } from "@chainvue/verus-sdk";
-import { parseAmount } from "verus-rpc";
+import { parseAmount } from "@chainvue/verus-rpc";
 
 /**
  * Chains this build will operate on. Mainnet is refused by compilation,

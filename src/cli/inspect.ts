@@ -9,7 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { formatAmount } from "verus-rpc";
+import { formatAmount } from "@chainvue/verus-rpc";
 
 import { auditLineSchema } from "../audit.js";
 import { readKeystoreFile, unlockKeystore } from "../keystore.js";

@@ -8,7 +8,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { parseAmount } from "verus-rpc";
+import { parseAmount } from "@chainvue/verus-rpc";
 import { z } from "zod";
 
 /**

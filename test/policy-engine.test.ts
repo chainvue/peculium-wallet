@@ -1,4 +1,4 @@
-import { parseAmount } from "verus-rpc";
+import { parseAmount } from "@chainvue/verus-rpc";
 import { describe, expect, it } from "vitest";
 
 import { intentFingerprint } from "../src/intents.js";

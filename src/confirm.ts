@@ -12,7 +12,7 @@
  * something else. Rendering is deterministic and clock-free.
  */
 
-import { formatAmount } from "verus-rpc";
+import { formatAmount } from "@chainvue/verus-rpc";
 
 import type { PaidFetchIntent, SpendIntent } from "./intents.js";
 import type { Policy } from "./policy/schema.js";

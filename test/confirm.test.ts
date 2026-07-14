@@ -1,4 +1,4 @@
-import { formatAmount, parseAmount } from "verus-rpc";
+import { formatAmount, parseAmount } from "@chainvue/verus-rpc";
 import { describe, expect, it } from "vitest";
 
 import { renderConfirmMessage, StaticConfirmer, type ConfirmContext } from "../src/confirm.js";

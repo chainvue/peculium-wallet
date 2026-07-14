@@ -11,7 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { VerusSDK } from "@chainvue/verus-sdk";
-import { VerusClient } from "verus-rpc";
+import { VerusClient } from "@chainvue/verus-rpc";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { createKeystoreFile, writeKeystoreFile } from "../src/keystore.js";
