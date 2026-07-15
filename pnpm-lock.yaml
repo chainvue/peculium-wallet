@@ -18,8 +18,8 @@ importers:
         specifier: ^0.1.2
         version: 0.1.2
       '@chainvue/verus-rpc':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.0
+        version: 0.3.0
       '@chainvue/verus-sdk':
         specifier: ^0.5.0
         version: 0.5.0
@@ -118,8 +118,8 @@ packages:
   '@chainvue/v402-verus-rpc@0.1.0':
     resolution: {integrity: sha512-+c0ansG+07zC4JNwai64drhp06WwWoWtDcpMHYOrOy7JSpL03Ax+nEnzQpN5MRiGBqjvduMcWEahHe07UFRpfQ==}
 
-  '@chainvue/verus-rpc@0.2.0':
-    resolution: {integrity: sha512-3quAlQ4s2CxFdtc5vXGlDwl5Rw5eX4kcmYRBxS7BvJ28h8ySqLXAn8TbDEAC6J609b78QFNwUOWMdSUaQkXV6Q==}
+  '@chainvue/verus-rpc@0.3.0':
+    resolution: {integrity: sha512-tpqnDwnlbMYFg6LQQia0xUPmiZ6ne2wyqcu25M1BL4YFoJ2AxjUfJvAnME1tUBhwa50JQSKncBFl682VVtNarw==}
     engines: {node: '>=22'}
 
   '@chainvue/verus-sdk@0.5.0':
@@ -2662,7 +2662,7 @@ snapshots:
     dependencies:
       cockatiel: 4.0.0
 
-  '@chainvue/verus-rpc@0.2.0':
+  '@chainvue/verus-rpc@0.3.0':
     dependencies:
       cockatiel: 4.0.0
       lossless-json: 4.3.0
