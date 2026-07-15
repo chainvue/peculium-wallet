@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/chainvue/peculium-wallet/compare/v0.2.2...v0.2.3) (2026-07-15)
+
+
+### Bug Fixes
+
+* **deps:** bump @chainvue/verus-rpc to ^0.3.0 ([1e18580](https://github.com/chainvue/peculium-wallet/commit/1e18580f4905b60fc36926fc94877040df12d1d5))
+
 ## [0.2.2](https://github.com/chainvue/peculium-wallet/compare/v0.2.1...v0.2.2) (2026-07-14)
 
 

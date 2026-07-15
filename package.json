@@ -1,6 +1,6 @@
 {
   "name": "@chainvue/peculium-wallet",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Peculium — the safe Verus wallet for AI agents. MCP server + CLI: local offline signing, public nodes, human-configured policy the agent cannot change.",
   "license": "Apache-2.0",
   "author": "Robert Lech",
