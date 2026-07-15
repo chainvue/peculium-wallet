@@ -6,8 +6,8 @@ strict, human-configured limits, plus a CLI only the human uses. **Testnet
 
 ## Money & safety — load-bearing
 - All amounts are `bigint` satoshis. Consumes `@chainvue/verus-sdk` (bigint
-  money) and `verus-rpc`. No `number` for money, no `.toString()`/`Number()`
-  shims across the SDK boundary.
+  money) and `@chainvue/verus-rpc`. No `number` for money, no
+  `.toString()`/`Number()` shims across the SDK boundary.
 - **Fail-closed everywhere**: compiled hard caps, per-currency policy caps
   (trailing-24h windows), append-only crash-safe ledger + audit trail,
   idempotent requestIds, ambiguous-broadcast discipline (only the broadcast
@@ -35,4 +35,5 @@ an explicit ask. This package's clean install requires `@chainvue/verus-sdk`
 ≥ 0.5.0 (bigint) on the registry.
 
 ## Decision log
-`RISKS.md` = maintainer-facing "why"; `CHANGELOG.md` = adopter-facing "what".
+The maintainer-facing "why" (risks, decisions) is kept **privately, outside
+this repo**; `CHANGELOG.md` is the adopter-facing "what".

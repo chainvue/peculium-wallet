@@ -20,3 +20,14 @@ keystore*.json
 test-artifacts/
 
 .DS_Store
+
+# Private maintainer notes — never committed (kept locally, outside the public repo)
+DESIGN.md
+RISKS.md
+ECOSYSTEM.md
+docs/DEMO-FLEET.md
+docs/LOOP-DEMO.md
+docs/PLAN-wallet-paid-fetch.md
+docs/PUBLISH-CHECKLIST.md
+docs/UX-GAPS.md
+docs/IDENTITY-RUNBOOK.md

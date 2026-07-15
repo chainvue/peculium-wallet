@@ -71,11 +71,10 @@ balance is gone. Hot-wallet discipline is the real loss bound.
 `identity create` · `export-key` · `backup`/`restore`. Run `peculium help` for
 syntax; `doctor` is scriptable (exit code = failed checks).
 
-## Non-goals (v1) & docs
+## Non-goals (v1)
 
 Remote/hosted agents, value-based caps, multi-sig identities, DEX conversions,
-VerusPay invoices, mainnet. Deep dives: [DESIGN.md](./DESIGN.md) (threat model)
-· [RISKS.md](./RISKS.md) · [ECOSYSTEM.md](./ECOSYSTEM.md) ·
-[docs/IDENTITY-RUNBOOK.md](./docs/IDENTITY-RUNBOOK.md).
+VerusPay invoices, mainnet. The security model is covered above; deeper design
+and threat-model notes are maintained privately.
 
 Apache-2.0.
