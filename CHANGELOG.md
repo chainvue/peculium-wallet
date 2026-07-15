@@ -26,7 +26,7 @@
 `wallet_paid_fetch`: one client for topup + prepaid balance + per-request paid
 API calls under one identity, key, policy, and ledger. Consumes the exact-
 integer (bigint) `@chainvue/verus-sdk` (**BREAKING** SDK dependency, now
-`^0.5.0`). See RISKS.md.
+`^0.5.0`).
 
 ## 0.1.0 (2026-07-14) — first release
 
