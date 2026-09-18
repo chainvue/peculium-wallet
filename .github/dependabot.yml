@@ -1,0 +1,46 @@
+# Dependabot — watches npm dependencies and the SHA-pinned GitHub Actions.
+#
+# Commit-message prefixes are chosen for semantic-release (angular preset):
+# - runtime deps    → fix(deps)       → patch release (adopters get the bump)
+# - dev deps        → chore(deps-dev) → no release
+# - GitHub Actions  → ci(deps)        → no release
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+      include: scope
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: fix
+      prefix-development: chore
+      include: scope
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        update-types: ["minor", "patch"]
+
+      # vitest and its plugins declare exact peers on each other: vitest 5.0.1
+      # wants @vitest/coverage-v8 5.0.1, not ^5. Split across two PRs they
+      # install anyway (pnpm treats the peer break as a warning) and then fail
+      # at runtime — the v8 provider is handed an object where the older one
+      # expects a string, coverage reports 0% and every threshold trips.
+      # PR #1 did exactly that. `applies-to: security-updates` is the point:
+      # security updates are not grouped by default, and #1 was one.
+      vitest:
+        applies-to: security-updates
+        patterns:
+          - "vitest"
+          - "@vitest/*"
+      vitest-version-updates:
+        patterns:
+          - "vitest"
+          - "@vitest/*"
